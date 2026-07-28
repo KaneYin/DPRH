@@ -15,6 +15,13 @@
 - L2 8-way (DPRH §3.2) vs 4-way (MSF)
 - DDR4_2400_16x4 (DPRH) vs DDR4-3200 (MSF)  [ ] revisit if D-A0b flips
 
+## V1 (PREFETCH flag reaches MemCtrl) — AWAITING CLUSTER
+- Procedure + temp-probe: tests/dprh/test_v1_prefetch_flag.md
+- Code-path analysis (macOS): Cache::createMissPacket (cache.cc:553) reuses the
+  same req, so the PREFETCH flag is EXPECTED to survive to the MC without a
+  forwarding patch. Confirm empirically on cluster (HANDOFF C6).
+- No forwarding patch committed (none expected; apply only if cluster count==0).
+
 ## Gate status
 - G0: NOT EVALUATED
 
