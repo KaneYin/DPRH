@@ -18,6 +18,54 @@ tooling (`scripts/`, `tests/`, `results/`, `.gitignore`) is committed in the
 
 ---
 
+## C0 — Getting the code onto the cluster (do this first)
+
+**Current reality (2026-07-28):** there is **no writable git remote** for either repo.
+- Outer repo `/Users/kane/DPRH` (branch `v0`, 13 commits): **no remotes**.
+- Nested `gem5/` (branch `stable`, 6 DPRH commits on base `51edbbb9cf`): only remote
+  is the read-only public `github.com/gem5/gem5.git` — you cannot push to it.
+
+So a plain `git pull` on the cluster will NOT work yet. Pick one transfer path:
+
+### Option A (recommended, no server needed) — `git bundle` both repos
+On the **Mac**, from `/Users/kane/DPRH`:
+```bash
+git bundle create /tmp/dprh-outer.bundle --all           # outer repo (branch v0)
+git -C gem5 bundle create /tmp/dprh-gem5.bundle --all     # nested gem5 (branch stable)
+scp /tmp/dprh-outer.bundle /tmp/dprh-gem5.bundle <cluster>:~/
+```
+On the **cluster** (first time):
+```bash
+git clone -b v0 ~/dprh-outer.bundle DPRH
+cd DPRH
+rm -rf gem5                                               # remove empty placeholder if any
+git clone -b stable ~/dprh-gem5.bundle gem5
+```
+On later syncs, re-bundle on the Mac and on the cluster run:
+```bash
+cd ~/DPRH        && git pull ~/dprh-outer.bundle v0
+cd ~/DPRH/gem5   && git pull ~/dprh-gem5.bundle stable
+```
+
+### Option B (simplest, ignores git) — rsync the whole tree
+Everything is committed, so a working-tree copy carries all code. From the **Mac**:
+```bash
+rsync -av --exclude 'gem5/build/' --exclude 'm5out/' \
+      /Users/kane/DPRH/ <cluster>:~/DPRH/
+```
+Re-run the same rsync after each edit session. (No git history on the cluster, but
+the build/run commands below only need the working tree.)
+
+### Option C (proper fix, later) — create writable remotes
+Create a private repo you own for the outer project and, separately, push the gem5
+DPRH branch to your own gem5 fork; then `git clone` + `git remote` on the cluster.
+This is the "decide later" item from Phase 0 planning (submodule vs two-repo).
+
+**Verify after transfer** (cluster): `git -C ~/DPRH/gem5 log --oneline -1` shows
+`dprh(phase0): synthetic streams ...`, and `ls ~/DPRH/gem5/src/mem/dprh_filter.hh` exists.
+
+---
+
 ## Order of execution
 
 ### C1 — Task 2 Step 2: Build gem5.opt
