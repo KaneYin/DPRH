@@ -26,6 +26,10 @@
 - Cluster must run: ./scripts/build_gem5.sh 2>&1 | tee results/build.log
 - Then fill "built on <cluster hostname>" above and record build.log tail here.
 
-### Prefetcher-issued stat name (Task 4 Step 2) — TBD on cluster
-- The exact L2 prefetch-issued stat name is gem5-version-specific; record here
-  after the B1 smoke run (candidate: system.cpu.l2cache.prefetcher.pfIssued).
+### Task 4 — B1 emits SPP prefetches (V1 precondition) — AWAITING CLUSTER
+- Prefetcher wiring lives in gem5/configs/dprh/run_se.py:attach_private_caches
+  (SPP attached to L2 as `l2cache.prefetcher`, prefetch_on_access=True).
+- Cluster must run HANDOFF C4 (B1 smoke) then C5 (grep prefetch-issued stat).
+- Record the exact L2 prefetch-issued stat name here after the run
+  (gem5-version-specific; candidate: system.cpu.l2cache.prefetcher.pfIssued).
+- If zero: fix wiring in run_se.py before continuing (V1 needs prefetches).
