@@ -1,0 +1,115 @@
+---
+# Core gem5 build + C++ unit tests for the DPRH fork.
+#
+# Goal: prove that the DPRH gem5 fork still COMPILES and its C++ unit tests
+# pass on Linux. This deliberately does NOT run any simulation (no gem5
+# invocation on a workload) -- it only builds gem5 and runs gem5's own gtest
+# suite, which is the fast, deterministic "does the core still work" signal.
+#
+# Runs on every push and before a merge (pull_request).
+#
+# Uses the official gem5 all-dependencies Docker image so no toolchain/deps
+# install is needed, plus ccache (persisted via actions/cache) to keep repeat
+# builds fast. The two jobs run on separate GitHub-hosted runners so each gets
+# a full disk allowance for its own build tree.
+
+name: Build & Unit Tests
+
+on:
+    push:
+    pull_request:
+        types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    get-date:
+        # Date label for the ccache cache key: the first run each day is a
+        # miss and repopulates the cache; later runs that day are warm.
+        runs-on: ubuntu-latest
+        outputs:
+            date: ${{ steps.date.outputs.date }}
+        steps:
+            - id: date
+              run: echo "date=$(date +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+
+    unittests:
+        # Compiles the core gem5 objects and RUNS gem5's C++ gtest unit tests.
+        # No simulation is executed. dprh_filter.test.cc is picked up here.
+        needs: [get-date]
+        runs-on: ubuntu-latest
+        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+        timeout-minutes: 120
+        env:
+            CCACHE_DIR: ${{ github.workspace }}/.ccache
+            CCACHE_MAXSIZE: 2G
+            CC: ccache gcc
+            CXX: ccache g++
+        steps:
+            - name: Checkout (with gem5 submodule)
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+
+            - name: Install ccache
+              run: apt-get update && apt-get install -y ccache
+
+            - name: Restore ccache
+              uses: actions/cache@v4
+              with:
+                  path: ${{ github.workspace }}/.ccache
+                  key: ccache-unittests-${{ needs.get-date.outputs.date }}
+                  restore-keys: |
+                      ccache-unittests-
+
+            - name: Build & run C++ unit tests (no simulation)
+              working-directory: gem5
+              run: scons --no-compress-debug build/ALL/unittests.opt -j "$(nproc)"
+
+            - name: ccache stats
+              if: always()
+              run: ccache -s
+
+    compile-gem5:
+        # Proves the DPRH X86 gem5.opt binary compiles and links on Linux.
+        # `--version` just prints build info and exits -- it is NOT a
+        # simulation.
+        needs: [get-date]
+        runs-on: ubuntu-latest
+        container: ghcr.io/gem5/ubuntu-24.04_all-dependencies:latest
+        timeout-minutes: 120
+        env:
+            CCACHE_DIR: ${{ github.workspace }}/.ccache
+            CCACHE_MAXSIZE: 2G
+            CC: ccache gcc
+            CXX: ccache g++
+        steps:
+            - name: Checkout (with gem5 submodule)
+              uses: actions/checkout@v4
+              with:
+                  submodules: recursive
+
+            - name: Install ccache
+              run: apt-get update && apt-get install -y ccache
+
+            - name: Restore ccache
+              uses: actions/cache@v4
+              with:
+                  path: ${{ github.workspace }}/.ccache
+                  key: ccache-x86opt-${{ needs.get-date.outputs.date }}
+                  restore-keys: |
+                      ccache-x86opt-
+
+            - name: Build gem5.opt (X86)
+              working-directory: gem5
+              run: scons --no-compress-debug build/X86/gem5.opt -j "$(nproc)"
+
+            - name: Sanity check binary links (no simulation)
+              working-directory: gem5
+              run: ./build/X86/gem5.opt --version
+
+            - name: ccache stats
+              if: always()
+              run: ccache -s

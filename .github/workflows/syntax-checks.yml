@@ -1,0 +1,75 @@
+---
+# Lightweight syntax / style checks for the DPRH repo.
+#
+# Fast, GitHub-hosted, no gem5 build. Catches Python and C++ mistakes early on
+# every push and before a merge. The authoritative C++ syntax check (a real
+# compile) lives in build.yml -- this workflow only does standalone checks that
+# do not require building gem5.
+#
+# Mirrors the intent of upstream gem5 CI (pre-commit for Python, clang-format
+# for C++), scoped down to DPRH-owned sources.
+
+name: Syntax Checks
+
+on:
+    push:
+    pull_request:
+        types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    python-syntax:
+        # Byte-compiles every DPRH-owned Python file. `compileall` only parses
+        # (it does not import), so it is a pure syntax check with no deps.
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout (with gem5 submodule for configs/dprh)
+              uses: actions/checkout@v4
+              with:
+                  submodules: true
+
+            - name: Setup Python
+              uses: actions/setup-python@v5
+              with:
+                  python-version: '3.10'
+
+            - name: Byte-compile DPRH Python (syntax check)
+              run: |
+                  set -euo pipefail
+                  python -m compileall -q \
+                      scripts \
+                      gem5/configs/dprh
+
+    cpp-clang-format:
+        # Standalone structural/style check of the DPRH-owned C++ using the
+        # gem5 .clang-format. A pure standalone "does it parse" check is not
+        # possible for gem5 sources (they need generated headers), so the real
+        # C++ syntax validation is the compile in build.yml. This job catches
+        # malformed / mis-formatted C++ without a build.
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout (with gem5 submodule for src/mem)
+              uses: actions/checkout@v4
+              with:
+                  submodules: true
+
+            - name: Install clang-format
+              run: sudo apt-get update && sudo apt-get install -y clang-format
+
+            - name: Check DPRH C++ formatting
+              working-directory: gem5   # so the submodule's .clang-format is used
+              run: |
+                  set -euo pipefail
+                  mapfile -t files < <(find src configs \
+                      \( -name '*dprh*.cc' -o -name '*dprh*.hh' \
+                         -o -name '*dprh*.cpp' -o -name '*dprh*.h' \) \
+                      -not -path '*/__pycache__/*')
+                  if [ ${#files[@]} -eq 0 ]; then
+                      echo "No DPRH C++ files found -- nothing to check."
+                      exit 0
+                  fi
+                  printf 'Checking:\n%s\n' "${files[@]}"
+                  clang-format --dry-run --Werror "${files[@]}"
