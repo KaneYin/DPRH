@@ -29,6 +29,22 @@
   unflagged/B1 build reproduces stock FR-FCFS byte-for-byte by construction.
 - Cluster verification: HANDOFF C7 (diff b1_smoke vs b1_after6 -> no diff).
 
+## Phase 1 stats framework (Task 9) — authored; presence check is [cluster] C11
+- Populated in Phase 0 (computed with existing packetReady/burstReady only, no
+  parallel timing model, no DRAMInterface edits):
+    schedCycles, cyclesNoLegalDemand, cyclesHslot, readyRowHitPrefetch,
+    nonHslotReason[DEMAND_READY|NO_PREFETCH], demandReadLatency,
+    prefetchReadLatency, readWriteTurnarounds.
+- Declared but populated in Phase 1/3 (predicate refinement; kept at 0 for now,
+  hidden by nozero where applicable): turnaroundUnsafe, agedDemandBlocked,
+  demandRowHits, prefetchRowHits, nonHslotReason[PF_NOT_ROWHIT|TURNAROUND_UNSAFE
+  |AGED_DEMAND]. Row-hit split is deferred because it would require reading DRAM
+  bank open-row state (DRAMInterface is a hard-invariant no-touch); it is
+  computed in Phase 1 via a permitted probe, not by editing timing code.
+- H_slot predicate lives in single helper MemCtrl::hasLegalDemand (unit-testable
+  in Phase 1).
+- Cluster verification: HANDOFF C11 (all six grepped stats -> OK).
+
 ## Gate status
 - G0: NOT EVALUATED
 
