@@ -56,6 +56,16 @@
     R5 held-out (2-3, from R2, excluded from all tuning): __________
   These MUST be filled from measured MPKI on the cluster before Phase 1.
 
+## 3-trace smoke test (Task 12) — AUTHORED; AWAITING CLUSTER EXECUTION
+- Driver: scripts/smoke_test.sh (B0/B1/B2 x 3 memory-intensive benches ->
+  results/smoke.csv with IPC, LLC MPKI, DRAM row-hit rate).
+- Cluster: HANDOFF C16. Pick 3 memory-intensive benches from the Task 11 R2 set.
+- Sanity relations to verify FROM MEASURED smoke.csv (do NOT pre-judge):
+    (a) B1 IPC > B0 IPC on memory-intensive traces;
+    (b) B2 differs measurably from B1 on >=1 trace (row-hit rate / latency);
+    (c) no NaN/zero IPC.
+  Record the three numbers per trace here after the cluster run.
+
 ## Gate status
 - G0: NOT EVALUATED
 
