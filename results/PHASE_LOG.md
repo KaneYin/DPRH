@@ -45,6 +45,17 @@
   in Phase 1).
 - Cluster verification: HANDOFF C11 (all six grepped stats -> OK).
 
+## SPEC bring-up + MPKI profiling (Task 11) — AWAITING CLUSTER (data-dependent)
+- SE-mode cross-compile: benchmarks/README.md (fill exclusion list on cluster).
+- Profiler: scripts/mpki_profile.py (runs run_se.py --config B1 --prefetcher spp,
+  computes LLC_MPKI = system.llc.demandMisses::total / (simInsts/1000)).
+- Cluster: HANDOFF C14 (cross-compile) then C15 (profiling pass).
+- FROZEN SUITES (fill from results/mpki_profile.csv on cluster; DO NOT invent):
+    R2 main set (MPKI >= 1):        __________
+    R3 no-harm controls (MPKI<0.5): __________
+    R5 held-out (2-3, from R2, excluded from all tuning): __________
+  These MUST be filled from measured MPKI on the cluster before Phase 1.
+
 ## Gate status
 - G0: NOT EVALUATED
 
