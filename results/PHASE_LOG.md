@@ -79,7 +79,35 @@
   re-run HANDOFF C9, and commit "dprh(phase0): wire Option B filter feedback".
 
 ## Gate status
-- G0: NOT EVALUATED
+- G0: NOT EVALUATED — AWAITING CLUSTER (four conditions below are data-dependent)
+
+### Gate G0 evaluation scaffold (Task 14) — fill from cluster data; DO NOT pre-sign
+Each condition records: evidence source, measured value, PASS/FAIL. All four are
+cluster-measured; none may be marked PASS without observed cluster output.
+
+- G0.a — B1 vs B0 prefetch speedup on memory-intensive traces
+    Source: results/smoke.csv (B1 IPC > B0 IPC on the memory-intensive traces).
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+- G0.b — B2 vs B1 differs measurably on >=1 trace
+    Source: results/smoke.csv (row-hit rate / mean latency differs B1 vs B2).
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+- G0.c — V1 passes (PREFETCH flag reaches MemCtrl)
+    Source: tests/dprh/test_v1_prefetch_flag.md (v1PrefetchReadsSeen > 0) or the
+    permanent prefetchReadLatency::samples > 0 (Task 9/10).
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+- G0.d — traffic-gen calibration passes (row-hit monotonic in num_seq_pkts)
+    Source: scripts/analyze_calibration.py output over cal_1/cal_4/cal_16.
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+### Sign-off (only when ALL four PASS on cluster)
+- If all PASS: set "G0: PASSED (<date>)" with the four evidence lines, the frozen
+  commit (51edbbb9cfd37e92e9901aea2caa4a8f20eda005), and D-A0/D-A0b confirmations,
+  then commit "dprh(phase0): Gate G0 evaluated — PASS".
+- DO NOT start Phase 1 until G0 is PASSED. If any condition fails, the failing
+  task's fix is the next work item.
 
 ## Run snapshots
 (populated as tasks complete)
