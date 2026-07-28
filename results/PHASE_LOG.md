@@ -66,6 +66,18 @@
     (c) no NaN/zero IPC.
   Record the three numbers per trace here after the cluster run.
 
+## Task 13 (Option B feedback wiring) — CONDITIONAL SKIP (decision deferred to cluster)
+- Task 13 fires ONLY if the cluster finds Tasks 9 & 12 not green. Its purpose is
+  G0 interop, not completing Option B.
+- Phase 0 default: SKIPPED (documented). The noteUseful/noteEvicted feedback is
+  intentionally stubbed (optimistic accuracy) per plan/refs/option_b_limitations.md,
+  which is acceptable because Phase 1 instruments B1/B2 (filter accepts) and does
+  not depend on drop behavior.
+- Cluster action: after HANDOFF C11 (Task 9 stats) and C16 (Task 12 smoke), if
+  both are green, leave Task 13 SKIPPED. If not, wire noteUseful/noteEvicted from
+  the LLC prefetch used/evicted signals (hook points in option_b_limitations.md),
+  re-run HANDOFF C9, and commit "dprh(phase0): wire Option B filter feedback".
+
 ## Gate status
 - G0: NOT EVALUATED
 
