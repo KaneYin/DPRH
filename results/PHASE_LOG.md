@@ -22,6 +22,13 @@
   forwarding patch. Confirm empirically on cluster (HANDOFF C6).
 - No forwarding patch committed (none expected; apply only if cluster count==0).
 
+## Default-off invariant (Task 6 Step 6) — by construction; verify on cluster
+- New MemCtrl params enable_dprh/demand_first/enable_filter all default False.
+- chooseNext frfcfs branch: DPRH code runs only under `if (enableDprh)`, and the
+  Phase 0 dprhChooseNext returns queue.end() (no-op) even when true. So an
+  unflagged/B1 build reproduces stock FR-FCFS byte-for-byte by construction.
+- Cluster verification: HANDOFF C7 (diff b1_smoke vs b1_after6 -> no diff).
+
 ## Gate status
 - G0: NOT EVALUATED
 
