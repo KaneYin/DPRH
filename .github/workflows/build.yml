@@ -45,8 +45,6 @@ jobs:
         env:
             CCACHE_DIR: ${{ github.workspace }}/.ccache
             CCACHE_MAXSIZE: 2G
-            CC: ccache gcc
-            CXX: ccache g++
         steps:
             - name: Checkout (with gem5 submodule)
               uses: actions/checkout@v4
@@ -54,7 +52,13 @@ jobs:
                   submodules: recursive
 
             - name: Install ccache
-              run: apt-get update && apt-get install -y ccache
+              # Put ccache's compiler shims (/usr/lib/ccache/{gcc,g++}) on PATH
+              # so gem5 transparently compiles through ccache. gem5's SConstruct
+              # treats $CXX as a single executable, so `CXX="ccache g++"` breaks
+              # it -- the PATH-shim approach is the supported way.
+              run: |
+                  apt-get update && apt-get install -y ccache
+                  echo "/usr/lib/ccache" >> "$GITHUB_PATH"
 
             - name: Restore ccache
               uses: actions/cache@v4
@@ -83,8 +87,6 @@ jobs:
         env:
             CCACHE_DIR: ${{ github.workspace }}/.ccache
             CCACHE_MAXSIZE: 2G
-            CC: ccache gcc
-            CXX: ccache g++
         steps:
             - name: Checkout (with gem5 submodule)
               uses: actions/checkout@v4
@@ -92,7 +94,13 @@ jobs:
                   submodules: recursive
 
             - name: Install ccache
-              run: apt-get update && apt-get install -y ccache
+              # Put ccache's compiler shims (/usr/lib/ccache/{gcc,g++}) on PATH
+              # so gem5 transparently compiles through ccache. gem5's SConstruct
+              # treats $CXX as a single executable, so `CXX="ccache g++"` breaks
+              # it -- the PATH-shim approach is the supported way.
+              run: |
+                  apt-get update && apt-get install -y ccache
+                  echo "/usr/lib/ccache" >> "$GITHUB_PATH"
 
             - name: Restore ccache
               uses: actions/cache@v4
