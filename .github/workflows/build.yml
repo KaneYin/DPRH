@@ -78,7 +78,7 @@ jobs:
 
     compile-gem5:
         # Proves the DPRH X86 gem5.opt binary compiles and links on Linux.
-        # `--version` just prints build info and exits -- it is NOT a
+        # `--build-info` just prints build config and exits -- it is NOT a
         # simulation.
         needs: [get-date]
         runs-on: ubuntu-latest
@@ -115,8 +115,10 @@ jobs:
               run: scons --no-compress-debug build/X86/gem5.opt -j "$(nproc)"
 
             - name: Sanity check binary links (no simulation)
+              # --build-info prints build config and sys.exit(0)s without
+              # running a simulation. (gem5 has no --version flag.)
               working-directory: gem5
-              run: ./build/X86/gem5.opt --version
+              run: ./build/X86/gem5.opt --build-info
 
             - name: ccache stats
               if: always()
