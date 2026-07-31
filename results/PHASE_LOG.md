@@ -9,6 +9,40 @@
 - Primary prefetcher: SignaturePathPrefetcher (see D-A0)  [x] confirmed by user (locked to plan default)
 - Address mapping: RoRaBaCoCh | Page policy: open_adaptive | Read buffer: 64
 
+## FIX-6 — Frozen system parameters (H_slot-relevant; single source: dprh_common.FROZEN)
+Row-hit availability -- hence H_slot itself -- depends on page policy, address
+mapping, and read-queue depth, so these are frozen in `dprh_common.py:FROZEN`
+(the single source used by make_mem_ctrl) and printed by every run as a
+`[dprh-frozen] ...` line (frozen_summary(); see run_se.py / run_trafficgen.py).
+
+| Parameter              | Frozen value                         |
+|------------------------|--------------------------------------|
+| DRAM device            | DDR4_2400_16x4                       |
+| Address mapping        | RoRaBaCoCh                           |
+| Page policy            | open_adaptive                        |
+| Mem sched policy       | frfcfs                               |
+| Read buffer size       | 64                                   |
+| Write buffer size      | 64                                   |
+| Channels               | 1 (single MemCtrl/DRAM interface)    |
+| Ranks per channel      | 2  (DDR4_2400_16x4 default)          |
+| Banks per rank         | 16 (DDR4_2400_16x4 default)          |
+| Clock                  | 4GHz                                 |
+| Primary prefetcher     | SignaturePathPrefetcher (SPP)        |
+| Sensitivity prefetcher | StridePrefetcher                     |
+| gem5 base (frozen)     | v25.1.0.1-11-g9a6e31ed2a (research/dprh) |
+
+Notes:
+- Prefetcher assignment: SPP is PRIMARY, Stride is the SENSITIVITY prefetcher.
+  This corrects the plan's original Stride/SPP wording (D-A0); the code already
+  reflected it (make_prefetcher), now recorded here.
+- gem5 base drift: the frozen base advanced from the original
+  51edbbb9cf (v25.1.0.1-1) to 9a6e31ed2a (v25.1.0.1-11, an upstream gem5:stable
+  merge) during the FIX-1 rebase onto origin/research/dprh. The "Frozen
+  environment" block above records the pre-rebase base; this row is the current,
+  authoritative one. DRAM timing was not touched (hard invariant).
+- Self-documentation: every simout now carries a `[dprh-frozen]` line; a
+  results-aggregation step can refuse to merge runs whose line disagrees.
+
 ## Divergences from MSF (Chapter 5) — logged, intentional
 - Single-core (DPRH) vs 8-core (MSF)
 - LLC 2 MB/16-way (DPRH) vs 16 MB/8-way shared (MSF)
