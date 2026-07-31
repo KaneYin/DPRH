@@ -138,6 +138,51 @@ The conjunct is still wired in for definitional correctness and unit-testability
 - Invariants held: no DRAM timing logic touched, no write-drain change, all DPRH
   flags still default off.
 
+## FIX-2 (HIGH) — B2 demand-first was GLOBAL; changed to per-bank (PADC)
+
+### Root cause (evidence in source)
+B2 pre-pass, mem_ctrl.cc `demandFirst` block (pre-fix ~703-724): it built
+`demandsOnly` = every queued demand read (all banks), ran FR-FCFS on it, and if
+that returned any timing-ready demand it issued that demand. So **any ready
+demand anywhere suppresses every prefetch** -- global demand-first. Cross-bank
+FR-FCFS row-hit arbitration never runs while a ready demand exists, so a row-hit
+prefetch to an idle bank can never be placed ahead of a row-miss demand in a
+different bank.
+
+### Two-bank thought experiment
+Queue: demand D0 -> (rank0,bank0), prefetch P1 -> (rank0,bank1), P1 a row hit.
+- D0 ready, row-miss; P1 ready, row-hit:
+  - Global (pre-fix): `chooseNextFRFCFS(demandsOnly={D0})` returns D0 -> D0
+    issues, P1 blocked. (B2 artificially strong: a row-miss demand beats a
+    free row-hit prefetch on an independent bank.)
+  - Per-bank (PADC): P1's bank (bank1) has no queued demand, so P1 is eligible;
+    ordinary FR-FCFS over {D0, P1} is row-hit-first -> P1 (row hit) issues.
+- D0 timing-blocked, P1 ready: BOTH policies issue P1 (pre-fix already fell
+  through to full FR-FCFS when no demand was ready), so this case did not expose
+  the difference -- the ready-demand case above is the discriminator.
+
+### Decision (source wins; per plan recommendation)
+Implement **per-bank demand-first** as B2 -- the PADC-faithful, reportable
+baseline (Lee et al., "Prefetch-Aware DRAM Controllers": demand-vs-prefetch
+priority is applied within a bank; across banks the normal row-hit FR-FCFS
+arbiter decides). Replaced the global pre-pass rather than adding a
+`demand_first_scope` flag (fewer moving parts; per-bank is the only baseline we
+report). Work-conservation preserved: if nothing eligible is timing-ready, the
+existing fall-through to full FR-FCFS still issues any ready command.
+
+### Fix (applied)
+- Pure eligibility predicate extracted to `mem/dprh_demand_first.hh`
+  (`dprh::demandFirstEligible` / `demandFirstEligibility` + `bankKey`), so the
+  semantics are unit-testable without a full MemCtrl.
+- `demandFirst` block: build the set of banks holding >=1 queued demand, form
+  the eligible sub-queue (all demands + prefetches to demand-free banks), run
+  FR-FCFS on it; fall through to full FR-FCFS if nothing eligible is ready.
+- Test `mem/dprh_demand_first.test.cc`: the two-bank scenario (bank0 demand +
+  bank1 prefetch -> both eligible) and same-bank suppression (bank0 demand +
+  bank0 prefetch -> prefetch ineligible) -- would have caught the global bug.
+- Invariants held: no DRAM timing logic touched, no write-drain change,
+  demand_first still default off (B1 unaffected).
+
 ## SPEC bring-up + MPKI profiling (Task 11) — AWAITING CLUSTER (data-dependent)
 - SE-mode cross-compile: benchmarks/README.md (fill exclusion list on cluster).
 - Profiler: scripts/mpki_profile.py (runs run_se.py --config B1 --prefetcher spp,
