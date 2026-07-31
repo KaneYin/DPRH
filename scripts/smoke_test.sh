@@ -2,8 +2,10 @@
 set -euo pipefail
 # 3-trace B0/B1/B2 smoke test (plan Task 12). [cluster] script.
 #
-# Usage: ./scripts/smoke_test.sh <bench1> <bench2> <bench3>
+# Usage: ./scripts/smoke_test.sh [--final-run] <bench1> <bench2> <bench3>
 # where each <benchN> is a workload binary launch spec (path passed to --cmd).
+# --final-run permits R5 held-out traces (FIX-4 dispatch guard); omit it for
+# normal (tuning) runs, which refuse to touch held-out traces.
 # Runs {B0,B1,B2} for each at a modest window, then extracts IPC, LLC MPKI, and
 # DRAM read row-hit rate into results/smoke.csv.
 #
@@ -16,8 +18,14 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 GEM5="${REPO_ROOT}/gem5/build/X86/gem5.opt"
 RUN_SE="${REPO_ROOT}/gem5/configs/dprh/run_se.py"
 
+FINAL_RUN=""
+if [ "${1:-}" = "--final-run" ]; then
+  FINAL_RUN="--final-run"
+  shift
+fi
+
 if [ "$#" -lt 1 ]; then
-  echo "usage: $0 <bench1> [<bench2> <bench3> ...]" >&2
+  echo "usage: $0 [--final-run] <bench1> [<bench2> <bench3> ...]" >&2
   exit 2
 fi
 if [ ! -x "${GEM5}" ]; then
@@ -26,6 +34,10 @@ if [ ! -x "${GEM5}" ]; then
 fi
 
 BENCHES=("$@")
+
+# FIX-4: refuse to run R5 held-out traces unless --final-run was passed.
+python3 "${REPO_ROOT}/scripts/dispatch_guard.py" --check "${BENCHES[@]}" \
+  ${FINAL_RUN:+$FINAL_RUN} || exit $?
 for b in "${BENCHES[@]}"; do
   for cfg in B0 B1 B2; do
     "${GEM5}" --outdir="${REPO_ROOT}/m5out/smoke_${b##*/}_${cfg}" \

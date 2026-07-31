@@ -191,8 +191,40 @@ existing fall-through to full FR-FCFS still issues any ready command.
 - FROZEN SUITES (fill from results/mpki_profile.csv on cluster; DO NOT invent):
     R2 main set (MPKI >= 1):        __________
     R3 no-harm controls (MPKI<0.5): __________
-    R5 held-out (2-3, from R2, excluded from all tuning): __________
+    R5 held-out (2-3, from R2, excluded from all tuning): [FIX-4: now emitted
+      mechanically to results/HELD_OUT.md by mpki_profile.py -- copy from there,
+      do NOT hand-pick.]
   These MUST be filled from measured MPKI on the cluster before Phase 1.
+
+## FIX-4 (MEDIUM) — register held-out set mechanically at profiling time
+### Root cause (evidence in source)
+scripts/mpki_profile.py (pre-fix docstring lines 13-14 and final print lines
+165-166) deferred R5 held-out selection to a manual step: "chosen by the user
+from the R2 set and recorded in PHASE_LOG.md, not auto-selected here." So the
+held-out set was (a) curated, not mechanical, and (b) unregistered at the one
+natural point (C15 profiling) -- after which any tuning run could contaminate it,
+with nothing to stop it. R5 (research_plan.md) requires 2-3 memory-intensive
+traces excluded from ALL tuning; a manual, post-hoc list cannot enforce that.
+### Fix (applied)
+- mpki_profile.py: added a mechanical `select_held_out(r2_ranked)` -- from the R2
+  set sorted by descending MPKI, take every 5th by rank (ranks 5,10,15), capped
+  at 3; fallback = the single median-rank R2 member if R2 has < 5. The profiler
+  now emits results/HELD_OUT.md (selected traces + the exact rule + provenance)
+  as its final step, and its `--selftest` asserts the rule is deterministic and
+  curation-free.
+- scripts/dispatch_guard.py (new): reads HELD_OUT.md; `--check <bench>...` exits
+  nonzero if any bench is held-out unless `--final-run` is passed; every
+  `--final-run` invocation is appended to results/final_run.log (audit trail).
+  `--selftest` asserts refuse-without-flag / allow-with-flag / allow-non-heldout.
+- scripts/smoke_test.sh: routes its benches through dispatch_guard before running
+  and accepts a leading `--final-run` to forward.
+- Test/assertion that would have caught the gap: `dispatch_guard.py --selftest`
+  and `mpki_profile.py --selftest` (both run on macOS/CI, no gem5).
+- Dry-run demonstration (macOS, temp HELD_OUT.md with 605.mcf_s): held-out trace
+  without --final-run => REFUSED (rc=3); with --final-run => ALLOWED (rc=0) and
+  an audit line written to results/final_run.log; a non-held-out trace => ALLOWED
+  (rc=0). Both selftests print OK. `python -m compileall scripts` clean.
+- Invariants untouched (scripts only; no gem5, no timing, no flags).
 
 ## 3-trace smoke test (Task 12) — AUTHORED; AWAITING CLUSTER EXECUTION
 - Driver: scripts/smoke_test.sh (B0/B1/B2 x 3 memory-intensive benches ->
