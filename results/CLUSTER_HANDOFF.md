@@ -83,6 +83,31 @@ After success: fill `results/PHASE_LOG.md` "built on <cluster hostname>" field.
 Expected: prints `Hello world!` and `Exiting @ tick ...`.
 After C1+C2: commit PHASE_LOG update (`dprh(phase0): cluster build wrapper; record gem5.opt build`).
 
+### C2·V1 — V1 GATE (FIRST DATA-PRODUCING RUN — must pass before C3+)
+**HARD GATE. Do NOT run C3 or anything after it until this passes.** The PREFETCH
+flag must survive from the L2 prefetcher down to the MemCtrl; if it does not, the
+Option B filter and *every* prefetch-classified stat (H_slot included) are dead
+code and C3–C17 produce plausible-looking garbage. Uses the permanent
+`prefetchEnqueued` counter (FIX-3) — no temp probe or extra rebuild needed.
+```bash
+./gem5/build/X86/gem5.opt --outdir=m5out/v1 gem5/configs/dprh/run_se.py \
+  --config B1 --prefetcher spp \
+  --cmd gem5/tests/test-progs/hello/bin/x86/linux/hello \
+  --ff-offset 0 --warmup 0 --measure 5000000 2>&1 | tail -3
+grep -E "l2cache.*(pfIssued|num_hwpf|prefetch.*issued)" m5out/v1/stats.txt | head
+grep system.mem_ctrl.prefetchEnqueued m5out/v1/stats.txt
+```
+Verdict (self-contained — this run also exercises prefetch issue, folding in C5):
+- **PASS**: `prefetchEnqueued > 0` → the flag reaches the MC. Record the value in
+  PHASE_LOG (G0.c) and proceed to C3.
+- **FAIL, prefetch-issued == 0**: the L2 prefetcher issued nothing — a wiring bug
+  in `run_se.py` (prefetch_on_access / wrong cache), NOT a flag drop. Fix wiring
+  (old C5), rebuild, re-run this gate.
+- **FAIL, prefetch-issued > 0 but `prefetchEnqueued == 0`**: the flag is lost en
+  route. STOP. Diagnose per FIX-3 step 3 (LLC miss path vs membus vs trafficgen
+  tagging), patch flag forwarding minimally, rebuild, re-run this gate.
+Do not proceed while either FAIL holds.
+
 ### C3 — Task 3 Step 3: B0 config elaborates and runs
 ```bash
 ./gem5/build/X86/gem5.opt --outdir=m5out/b0_smoke \
@@ -109,21 +134,12 @@ Expected: a nonzero prefetch-issued stat under `system.cpu.l2cache`. Record the
 exact stat name in PHASE_LOG. If zero: fix wiring in run_se.py (prefetch_on_access,
 correct cache) before continuing — V1 cannot pass without prefetches.
 
-### C6 — Task 5 Step 2: V1 — PREFETCH flag reaches MemCtrl (requires TEMP probe build)
-NOTE: The Task 5 TEMP probe is authored then removed before commit (see Task 5).
-To run V1 you must temporarily re-apply the probe from
-`tests/dprh/test_v1_prefetch_flag.md` (it is documented there), rebuild, then run:
-```bash
-./scripts/build_gem5.sh
-./gem5/build/X86/gem5.opt --debug-flags=MemCtrl --outdir=m5out/v1 \
-  gem5/configs/dprh/run_se.py --config B1 --prefetcher spp \
-  --cmd gem5/tests/test-progs/hello/bin/x86/linux/hello \
-  --ff-offset 0 --warmup 0 --measure 5000000 2>&1 | grep -c "V1: prefetch-flagged"
-grep v1PrefetchReadsSeen m5out/v1/stats.txt
-```
-Expected (PASS): both counts > 0 — the PREFETCH flag reaches the MC.
-If count == 0: patch flag forwarding (Task 5 Step 3) and re-run.
-Permanent replacement of this check is `prefetchReadLatency::samples > 0` (Task 9/10).
+### C6 — V1 (MOVED to the front — see C2·V1)
+FIX-3 moved V1 to the first data-producing slot (C2·V1) and replaced the old
+TEMP-probe rebuild with the permanent `prefetchEnqueued` counter, so no probe
+re-apply is needed here. This slot is retained only as a back-reference: V1 must
+already have PASSED at C2·V1 before you reached this point. For an optional
+per-packet trace, add `--debug-flags=MemCtrl` to the C2·V1 run.
 
 ### C7 — Task 6 Step 6: Prove default-off == stock
 ```bash

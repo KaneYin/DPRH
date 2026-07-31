@@ -16,11 +16,37 @@
 - DDR4_2400_16x4 (DPRH) vs DDR4-3200 (MSF)  [ ] revisit if D-A0b flips
 
 ## V1 (PREFETCH flag reaches MemCtrl) — AWAITING CLUSTER
-- Procedure + temp-probe: tests/dprh/test_v1_prefetch_flag.md
-- Code-path analysis (macOS): Cache::createMissPacket (cache.cc:553) reuses the
-  same req, so the PREFETCH flag is EXPECTED to survive to the MC without a
-  forwarding patch. Confirm empirically on cluster (HANDOFF C6).
+- Procedure: HANDOFF C2·V1 (front gate). [FIX-3: moved to first data-producing
+  slot; permanent prefetchEnqueued counter replaces the removable temp probe.]
+- Code-path analysis (macOS): Cache::createMissPacket (cache.cc:552, re-verified
+  by FIX-3; log previously said 553 -- 1-line drift) does `new Packet(cpu_pkt->
+  req, cmd, blkSize)`, reusing the originating req; isPrefetch() reads
+  req->isPrefetch(), so the PREFETCH flag is EXPECTED to survive to the MC
+  without a forwarding patch. Confirm empirically on cluster (HANDOFF C2·V1).
 - No forwarding patch committed (none expected; apply only if cluster count==0).
+
+## FIX-3 (HIGH) — front-load V1 with a permanent prefetch-enqueue counter
+### Root cause / risk (evidence in source)
+V1 (does the PREFETCH flag reach the MC?) sat at C6, behind B1/B2 work and behind
+a TEMP probe that had to be re-applied + rebuilt to run. If the flag were lost,
+the Option B filter (mem_ctrl.cc:219, gated on pkt->req->isPrefetch()) and every
+prefetch-classified stat are dead code, and C7-C16 produce plausible garbage.
+The survival basis is real but was unconfirmed at runtime: cache.cc:552 reuses
+the originating req in the miss packet, so the flag rides along by construction.
+### Fix (applied)
+- Added permanent counter `prefetchEnqueued` incremented at the MC read-queue
+  enqueue site (addToReadQueue, before the Option B filter so it is independent
+  of filter config). This is the runtime V1 assertion; no temp probe needed.
+- Reordered CLUSTER_HANDOFF.md: new HARD GATE C2·V1 is the first data-producing
+  run after build. Its verdict is self-contained (also greps prefetch-issued,
+  folding in old C5): pfIssued==0 => wiring bug; pfIssued>0 & prefetchEnqueued==0
+  => flag dropped en route (STOP, patch forwarding); both>0 => PASS. The handoff
+  forbids proceeding to C3+ until it passes. Old C6 is now a back-reference.
+- Test that would have caught the bug: prefetchEnqueued > 0 is the assertion; it
+  is exercised by the C2·V1 gate on the cluster (a from-cold SE run is required,
+  which the macOS author machine cannot do).
+- Invariants held: no DRAM timing logic, no write-drain change, flags default off
+  (the counter is unconditional but read-only accounting).
 
 ## Default-off invariant (Task 6 Step 6) — by construction; verify on cluster
 - New MemCtrl params enable_dprh/demand_first/enable_filter all default False.
@@ -161,8 +187,8 @@ cluster-measured; none may be marked PASS without observed cluster output.
     Measured: __________    Verdict: AWAITING CLUSTER
 
 - G0.c — V1 passes (PREFETCH flag reaches MemCtrl)
-    Source: tests/dprh/test_v1_prefetch_flag.md (v1PrefetchReadsSeen > 0) or the
-    permanent prefetchReadLatency::samples > 0 (Task 9/10).
+    Source: HANDOFF C2·V1 -- system.mem_ctrl.prefetchEnqueued > 0 (FIX-3
+    permanent counter). Corroborated by prefetchReadLatency::samples > 0.
     Measured: __________    Verdict: AWAITING CLUSTER
 
 - G0.d — traffic-gen calibration passes (row-hit monotonic in num_seq_pkts)
