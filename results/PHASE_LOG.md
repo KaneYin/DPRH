@@ -43,6 +43,36 @@ Notes:
 - Self-documentation: every simout now carries a `[dprh-frozen]` line; a
   results-aggregation step can refuse to merge runs whose line disagrees.
 
+## FIX-5 (LOW) — guard the positional createDram tag_prefetch argument
+### Root cause (evidence in source)
+run_trafficgen.py passes tag_prefetch POSITIONALLY as the 15th arg to
+PyTrafficGen.createDram, because PyBindMethod (PyTrafficGen.py:60) binds the raw
+C++ method and does not surface C++ default args to Python. createDram's C++
+signature (base.cc:412-421) ends in `bool tag_prefetch`. If an upstream gem5
+upgrade inserts a parameter, our positional bool silently binds to the wrong
+slot and tag_prefetch takes its C++ default (false) -- no error, corrupted R6
+experiments (prefetch stream no longer tagged).
+### Readback investigation
+Nothing on the Python side is readable: the createDram return is an opaque
+BaseGen handle, and PyTrafficGen exposes no tag param. Per the plan's fallback,
+added a trivial const getter.
+### Fix (applied)
+- base.hh: BaseTrafficGen gains `bool lastDramTagPrefetch` (protected) +
+  `bool getLastDramTagPrefetch() const`; base.cc: createDram sets
+  lastDramTagPrefetch = tag_prefetch before constructing the DramGen;
+  PyTrafficGen.py: export PyBindMethod("getLastDramTagPrefetch").
+- run_trafficgen.py: both generators now capture the createDram return, assert
+  `getLastDramTagPrefetch() == <intended>` (demand: False; prefetch:
+  bool(--pf-tag)), then yield; the tag line carries the required
+  "POSITIONAL ARG -- verify slot on any gem5 upgrade (see FIX-5)" comment.
+  A slot shift makes the actual bound value differ from intended -> assertion
+  fires before any data is produced.
+- Test/acceptance: assertion logic demonstrated locally (mock) -- passes on a
+  correct bind, fires on a permuted/wrong-slot bind. Full behavior is
+  cluster-verified (needs gem5); compile is verified by CI (build.yml).
+- Invariants untouched (no DRAM timing, no write-drain, flags default off; the
+  getter is read-only and stock createDram callers use the C++ default).
+
 ## Divergences from MSF (Chapter 5) — logged, intentional
 - Single-core (DPRH) vs 8-core (MSF)
 - LLC 2 MB/16-way (DPRH) vs 16 MB/8-way shared (MSF)
