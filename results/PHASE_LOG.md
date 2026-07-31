@@ -32,18 +32,85 @@
 ## Phase 1 stats framework (Task 9) — authored; presence check is [cluster] C11
 - Populated in Phase 0 (computed with existing packetReady/burstReady only, no
   parallel timing model, no DRAMInterface edits):
-    schedCycles, cyclesNoLegalDemand, cyclesHslot, readyRowHitPrefetch,
-    nonHslotReason[DEMAND_READY|NO_PREFETCH], demandReadLatency,
+    schedCycles, cyclesNoLegalDemand, cyclesHslot, cyclesReadyPrefetchNoDemand,
+    cyclesHslotUpperGap, nonHslotReason[DEMAND_READY|NO_PREFETCH|PF_NOT_ROWHIT
+    |TURNAROUND_UNSAFE], turnaroundUnsafe, demandReadLatency,
     prefetchReadLatency, readWriteTurnarounds.
+    [SUPERSEDED BY FIX-1: `cyclesHslot` originally counted the proxy upper bound
+    (no row-hit/turnaround check); the row-hit split below was WRONGLY deferred.
+    See the FIX-1 section for the corrected predicate and stats. `cyclesHslot`
+    is now the true H_slot; the proxy lives in `cyclesReadyPrefetchNoDemand`.]
 - Declared but populated in Phase 1/3 (predicate refinement; kept at 0 for now,
-  hidden by nozero where applicable): turnaroundUnsafe, agedDemandBlocked,
-  demandRowHits, prefetchRowHits, nonHslotReason[PF_NOT_ROWHIT|TURNAROUND_UNSAFE
-  |AGED_DEMAND]. Row-hit split is deferred because it would require reading DRAM
-  bank open-row state (DRAMInterface is a hard-invariant no-touch); it is
-  computed in Phase 1 via a permitted probe, not by editing timing code.
-- H_slot predicate lives in single helper MemCtrl::hasLegalDemand (unit-testable
-  in Phase 1).
+  hidden by nozero where applicable): agedDemandBlocked,
+  demandRowHits, prefetchRowHits, nonHslotReason[AGED_DEMAND]. [FIX-1: the
+  row-hit-dependent items are no longer deferred — reading DRAM open-row state
+  READ-ONLY does not touch the timing-logic invariant; see FIX-1.]
+- H_slot predicate: the demand side is in MemCtrl::hasLegalDemand; the full
+  cycle verdict (prefetch/row-hit/turnaround side) is the pure, unit-tested
+  dprh::classifyHslotCycle in mem/dprh_hslot.hh (added by FIX-1).
 - Cluster verification: HANDOFF C11 (all six grepped stats -> OK).
+
+## FIX-1 (CRITICAL) — cyclesHslot did not measure H_slot
+
+### Formal predicate (research_plan.md §5, line 129)
+H_slot(cycle) = (no timing-legal demand command this cycle)
+              AND (∃ accepted prefetch p:
+                     timing-ready(p) AND row-hit(p) AND turnaround-safe(p)).
+
+### Root-cause evidence (source, not the doc)
+Population site: `MemCtrl::chooseNext`, frfcfs branch, mem_ctrl.cc:617-643.
+Conjunct → code location → present/absent (pre-fix):
+
+| conjunct                    | code                                    | status |
+|-----------------------------|-----------------------------------------|--------|
+| no timing-legal demand      | `!hasLegalDemand(queue,mem_intr)` :622   | PRESENT |
+| ∃ prefetch p                | `mp->pkt->req->isPrefetch()` :631        | PRESENT |
+| timing-ready(p)             | `packetReady(mp, mem_intr)` :632         | PRESENT |
+| **row-hit(p)**              | *none* — loop 627-636 ignores open row   | **ABSENT (bug)** |
+| **turnaround-safe(p)**      | *none* — no bus-direction test           | **ABSENT (bug)** |
+
+The two absent conjuncts are the bug: `++stats.cyclesHslot` (mem_ctrl.cc:639)
+fired on *any* timing-ready accepted prefetch, i.e. an upper bound on true
+H_slot that admits row-conflict prefetches (which cost precharge+activate) and,
+in principle, turnaround-forcing prefetches. The stat literally named
+`readyRowHitPrefetch` was incremented in the same block without any row-hit
+check — a misnomer confirming the gap.
+
+### Refuting the deferral rationale (this log, lines 38-43)
+The prior note deferred the row-hit split claiming "DRAMInterface is a
+hard-invariant no-touch." That invariant forbids modifying *timing logic*. The
+open-row state is read read-only in the existing FR-FCFS ranker at
+dram_interface.cc:92,108 as `const Bank& bank = ranks[pkt->rank]->banks[pkt->bank];
+... bank.openRow == pkt->row;`. A **const accessor** over that same existing
+state performs no timing computation and mutates nothing, so it does not touch
+the invariant. Row-hit is therefore obtainable read-only in Phase 0; the
+deferral was over-conservative. Discrepancy logged; source wins.
+
+### Turnaround-safety finding
+The H_slot accounting runs only inside the `busState == READ` path
+(mem_ctrl.cc:1055) and all read-queue prefetches are reads, so a harvested
+prefetch never forces a bus turn *at this site* — turnaround-safe is effectively
+always true here, and the `TURNAROUND_UNSAFE` bin will read ~0 in the read path.
+The conjunct is still wired in for definitional correctness and unit-testability
+(the pure predicate is exercised with a mismatched-direction case).
+
+### Fix (applied — see commit dprh(phase0-fix): FIX-1)
+- Added read-only `MemInterface::isRowHit` (default false) +
+  `DRAMInterface::isRowHit` override (const, reads `banks[].openRow`; no timing
+  edit). Reuses the exact state the FR-FCFS ranker already inspects.
+- Extracted the pure cycle classifier into `mem/dprh_hslot.hh`
+  (`dprh::classifyHslotCycle`) so the predicate is unit-testable without a full
+  MemCtrl. `chooseNext` now does one pass computing {anyReadyPrefetch,
+  anyReadyRowHit, anyHarvestable} and defers the verdict to it.
+- Stats: `cyclesHslot` keeps the TRUE predicate; misnamed `readyRowHitPrefetch`
+  renamed to `cyclesReadyPrefetchNoDemand` (the proxy/upper bound, a
+  decomposition term); added `cyclesHslotUpperGap = proxy − true`. Decomposition
+  bins `PF_NOT_ROWHIT` / `TURNAROUND_UNSAFE` and `turnaroundUnsafe` now populated.
+- Test: `mem/dprh_hslot.test.cc` covers the plan's three cases
+  (row-conflict-only → proxy only; row-hit same-dir → both; row-hit needing a
+  turn → proxy only, TURNAROUND_UNSAFE bin).
+- Invariants held: no DRAM timing logic touched, no write-drain change, all DPRH
+  flags still default off.
 
 ## SPEC bring-up + MPKI profiling (Task 11) — AWAITING CLUSTER (data-dependent)
 - SE-mode cross-compile: benchmarks/README.md (fill exclusion list on cluster).
