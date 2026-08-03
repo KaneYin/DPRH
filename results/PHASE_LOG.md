@@ -358,3 +358,110 @@ cluster-measured; none may be marked PASS without observed cluster output.
 - Record the exact L2 prefetch-issued stat name here after the run
   (gem5-version-specific; candidate: system.cpu.l2cache.prefetcher.pfIssued).
 - If zero: fix wiring in run_se.py before continuing (V1 needs prefetches).
+
+---
+
+## Phase 1 — Characterization
+
+> **Ordering constraint:** All Phase-1 measured results and Gate G1 signing are
+> gated behind **G0 PASSED** on the cluster. Do NOT interpret any authored stat
+> as verified; do NOT sign G1 until G0 is signed and real-trace data exist.
+
+### New and newly populated stats (Phase 1)
+
+The six new/populated Phase-1 stats, and the Phase-0 stats they combine with:
+
+| `stats.txt` name | Type | Phase | Notes |
+|---|---|---|---|
+| `system.mem_ctrl.demandReadsSeen` | Scalar | Phase 1 new | late-prefetch denominator |
+| `system.mem_ctrl.latePrefetchDemands` | Scalar | Phase 1 new | demands arriving while a prefetch to their block is still queued |
+| `system.mem_ctrl.agedDemandBlocked` | Scalar | Phase 1 populated | H_slot cycles where ≥1 demand aged ≥ A_guard (upper bound — see note) |
+| `system.mem_ctrl.nonHslotReason::aged_demand` | Histogram bin | Phase 1 populated | alias of `agedDemandBlocked` in the non-H decomposition |
+| `system.mem_ctrl.demandRowHits` | Scalar | Phase 1 populated | demand reads that hit an open DRAM row at issue time |
+| `system.mem_ctrl.prefetchRowHits` | Scalar | Phase 1 populated | prefetch reads that hit an open DRAM row at issue time |
+
+Phase-0 stats these combine with (already populated):
+
+| `stats.txt` name | Role in derived metric |
+|---|---|
+| `system.mem_ctrl.schedCycles` | H_slot and decomposition denominator |
+| `system.mem_ctrl.cyclesHslot` | true H_slot numerator |
+| `system.mem_ctrl.cyclesReadyPrefetchNoDemand` | proxy / upper bound |
+| `system.mem_ctrl.demandReadLatency::samples` | demand row-hit rate denominator |
+| `system.mem_ctrl.prefetchReadLatency::samples` | prefetch row-hit rate denominator |
+
+### Derived-metric formulas
+
+```
+H_slot fraction       = cyclesHslot / schedCycles
+late-prefetch rate    = latePrefetchDemands / demandReadsSeen
+demand row-hit rate   = demandRowHits / demandReadLatency::samples
+prefetch row-hit rate = prefetchRowHits / prefetchReadLatency::samples
+aged-demand frac      = agedDemandBlocked / schedCycles   (upper bound; see note)
+```
+
+### Pre-registered R8 pressure metric
+
+- **Metric:** `system.mem_ctrl.dram.busUtil` (DRAM channel utilization, %)
+- **Threshold:** median B2 `busUtil` across the R2 memory-intensive suite.
+  Registered here **before** looking at DPRH-relevant deltas (R8 requirement).
+
+  pre-registered threshold: __________   (fill from cluster run of aggregate_hslot.py
+                                          before examining any B2-vs-B1 delta)
+
+  `aggregate_hslot.py` computes this median automatically and writes it to the
+  CSV header; copy it here. A workload is `pressure_bin=high` iff its B2
+  `busUtil` ≥ this threshold.
+
+### A_guard used for Phase-1 aged-demand runs
+
+- **Phase-1 value:** 64 cycles (passed as `--a-guard 64` in all P3/P4 handoff
+  runs). This is a placeholder; the real Phase-3 sweep explores the full range.
+- **Default `dprh_a_guard = 0`:** with A_guard = 0, every queued demand is
+  trivially "aged" (age ≥ 0), so `agedDemandBlocked == cyclesHslot` — an upper
+  bound. Phase-1 runs use 64 to obtain a non-trivial bin; treat all Phase-1
+  aged-demand numbers as indicative, not authoritative.
+
+---
+
+### Gate G1 scaffold — AWAITING CLUSTER (DO NOT PRE-SIGN)
+
+> G1 **must not** be signed until **G0 is PASSED** and real-trace data from the
+> cluster P3 sweep exist. The three rows below are scaffolded per
+> research_plan.md §5; fill `Measured` from `gate_g1.py` output; sign only after
+> a human reviews cluster data and commits.
+
+**Input:** median B2 `hslot_frac` across the R2 memory-intensive set (all R2
+workloads NOT in the R3 no-harm controls), as reported by
+`scripts/gate_g1.py results/phase1_hslot.csv --controls-file <R3 controls>`.
+
+**Regime thresholds (research_plan.md §5):**
+
+| Regime | Condition | Phase-2 direction |
+|---|---|---|
+| PIVOT | median B2 H_slot < 2% | Pure characterization (Outcome O3); do NOT build MVP-0 as a performance mechanism |
+| PROCEED — timeliness framing | 2% ≤ median B2 H_slot < 8% | Proceed to Phase 2; frame gains as timeliness / bandwidth-efficiency first, IPC second |
+| PROCEED — performance framing | median B2 H_slot ≥ 8% | Proceed to Phase 2 with performance framing |
+
+**Gate G1 measurements (fill from cluster):**
+
+- G1 — median B2 H_slot on the R2 memory-intensive set
+    Source: `python3 scripts/gate_g1.py results/phase1_hslot.csv --controls-file <R3 file>`
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+- G1 (per-workload) — H_slot by workload and pressure bin
+    Source: `results/phase1_hslot.csv` (written by `aggregate_hslot.py`)
+    Measured: see CSV    Verdict: AWAITING CLUSTER
+
+- G1 (late-prefetch) — median late-prefetch rate on R2 memory-intensive set
+    Source: `late_prefetch_rate` column in `results/phase1_hslot.csv`
+    Measured: __________    Verdict: AWAITING CLUSTER
+
+### Sign-off (only when G0 PASSED and all cluster measurements exist)
+- If median < 2%: set "G1: PIVOT (<date>)" with the median, per-workload table,
+  the regime justification, and the cluster evidence; commit
+  "dprh(phase1): Gate G1 evaluated — PIVOT".
+- If 2% ≤ median < 8%: set "G1: PROCEED — timeliness framing (<date>)" similarly.
+- If ≥ 8%: set "G1: PROCEED — performance framing (<date>)" similarly.
+- DO NOT start Phase 2 until G1 is signed. If G0 has not passed, this scaffold
+  has no standing data and nothing here may be interpreted as a verdict.

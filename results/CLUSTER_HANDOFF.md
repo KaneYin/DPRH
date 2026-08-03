@@ -228,3 +228,157 @@ memory-intensive traces; (b) B2 differs from B1 on >=1 trace; (c) no NaN/zero IP
 Using results/smoke.csv, tests/dprh/test_v1_prefetch_flag.md, and the calibration
 output, evaluate G0.a–G0.d and sign off in results/PHASE_LOG.md. See Task 14.
 DO NOT mark G0 PASSED until all four conditions are observed on the cluster.
+
+---
+
+## Phase 1 — Characterization Handoff (P-series)
+
+> **DO NOT RUN UNTIL G0 IS PASSED.** All P-series commands are gated behind Gate
+> G0 in `results/PHASE_LOG.md`. If G0 has not been signed (all four conditions
+> G0.a–G0.d confirmed on the cluster), stop here and return to C17.
+
+Note on sync: pull both repos before starting.
+```bash
+cd ~/DPRH        && git pull ~/dprh-outer.bundle v0
+cd ~/DPRH/gem5   && git pull ~/dprh-gem5.bundle stable
+```
+(Or re-rsync if using Option B from C0.)
+
+---
+
+### P1 — Build Phase-1 gem5.opt + unit tests
+
+Build the Phase-1 instrumented binary and verify all DPRH unit tests pass,
+including the new `dprh_late.test` and the extended `dprh_hslot.test`.
+
+```bash
+cd gem5
+scons build/X86/gem5.opt -j$(nproc) 2>&1 | tee ../results/build_phase1.log
+scons build/X86/unittests.opt 2>&1 | tee -a ../results/build_phase1.log
+```
+
+Expected:
+- `build/X86/gem5.opt` links cleanly.
+- All `dprh_*.test` binaries build and pass:
+  ```bash
+  for t in dprh_hslot dprh_filter dprh_demand_first dprh_late; do
+    echo "--- $t ---"
+    ./build/X86/mem/${t}.test.opt
+  done
+  ```
+  Each must print `[  PASSED  ] N test(s).` with 0 failures. The
+  `dprh_late.test` (4 tests) and `dprh_hslot.test` (now 4 tests, including
+  the new aged-blocked case) are new in Phase 1.
+
+After success: record the build host and log tail in `results/PHASE_LOG.md`.
+
+---
+
+### P2 — Synthetic 3×3 H_slot attribution factorial (RUN BEFORE P3)
+
+Drive the R6 synthetic factorial **before** the real-trace sweep; it is fast and
+validates the Phase-1 instrumentation before committing cluster CPU time to SPEC.
+
+```bash
+cd ~/DPRH
+bash scripts/hslot_factorial.sh gem5/build/X86/gem5.opt 64
+```
+
+This runs 18 gem5 invocations (B1 × B2 × 3 demand periods × 3 seq-pkts levels)
+with `--a-guard 64`, writing one outdir per cell under `results/runs/factorial/`.
+
+Then analyze and check attribution monotonicity:
+
+```bash
+python3 scripts/analyze_hslot_surface.py results/runs/factorial \
+        --out results/phase1_surface.csv
+```
+
+Expected: prints `ATTRIBUTION: PASS` (H_slot is non-decreasing in both demand
+pressure and prefetch row-locality dimensions). If FAIL, diagnose the anomalous
+cell before proceeding to P3 (a monotonicity failure may indicate a
+instrumentation bug or traffic-gen misconfiguration).
+
+After PASS: commit the surface CSV:
+```bash
+git add results/phase1_surface.csv
+git commit -m "dprh(phase1): factorial surface CSV (cluster run)"
+```
+
+---
+
+### P3 — Real-trace B1/B2 sweep with Phase-1 instrumentation
+
+For each workload in the R2 memory-intensive set (from `results/mpki_profile.csv`,
+MPKI ≥ 1) and each config in `{B1, B2}`, run:
+
+```bash
+./gem5/build/X86/gem5.opt \
+  --outdir results/runs/<workload>/<config> \
+  gem5/configs/dprh/run_se.py \
+  --config <config> \
+  --prefetcher spp \
+  --a-guard 64 \
+  --cmd <path/to/binary> \
+  --options "<benchmark arguments>" \
+  --ff-offset <N> --warmup <W> --measure 50000000
+```
+
+Route held-out traces (from `results/HELD_OUT.md`) through `dispatch_guard.py`;
+only use `--final-run` for the final authoritative held-out measurement:
+
+```bash
+python3 scripts/dispatch_guard.py --check <workload> || \
+  python3 scripts/dispatch_guard.py --check <workload> --final-run
+```
+
+After each run, verify that `system.mem_ctrl.demandReadsSeen` is non-zero and
+that at least one memory-intensive workload produces non-zero
+`system.mem_ctrl.agedDemandBlocked` and
+`system.mem_ctrl.nonHslotReason::aged_demand` with `--a-guard 64`:
+
+```bash
+grep -E "demandReadsSeen|agedDemandBlocked|nonHslotReason::aged_demand" \
+     results/runs/<workload>/B2/stats.txt
+```
+
+If both `agedDemandBlocked` and `nonHslotReason::aged_demand` are zero on ALL
+memory-intensive traces, the aged-demand bin is not firing — diagnose Task 5
+population site in `mem_ctrl.cc` before proceeding to P4.
+
+---
+
+### P4 — Aggregate + Gate G1
+
+Aggregate the P3 runs into the per-workload H_slot table:
+
+```bash
+python3 scripts/aggregate_hslot.py results/runs \
+        --out results/phase1_hslot.csv
+```
+
+Record the printed `pressure threshold (B2 bus_util%):` value in
+`results/PHASE_LOG.md` (the pre-registered R8 threshold line) **before**
+inspecting any DPRH-relevant delta.
+
+Then evaluate Gate G1:
+
+```bash
+python3 scripts/gate_g1.py results/phase1_hslot.csv \
+        --controls-file results/r3_controls.txt
+```
+
+(`results/r3_controls.txt` is one workload name per line for the R3 no-harm
+control set; fill from `results/mpki_profile.csv`, MPKI < 0.5.)
+
+The script prints the per-workload B2 H_slot fractions, the median, and a
+verdict tag (`PIVOT` / `PROCEED_TIMELINESS` / `PROCEED_PERFORMANCE`). It does
+**not** sign Gate G1. Paste the output block into `results/PHASE_LOG.md`'s Gate
+G1 scaffold (the `Measured` field) and then **a human signs G1** by committing:
+
+```bash
+git add results/phase1_hslot.csv results/PHASE_LOG.md
+git commit -m "dprh(phase1): Gate G1 evaluated — <PIVOT|PROCEED_TIMELINESS|PROCEED_PERFORMANCE>"
+```
+
+Do NOT begin Phase 2 until this commit exists.
