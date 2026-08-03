@@ -40,7 +40,13 @@ def load_b2_memintensive(csv_path, controls):
             v = row.get("hslot_frac")
             if v in (None, "", "None"):
                 continue
-            out[row["workload"]] = float(v)
+            try:
+                out[row["workload"]] = float(v)
+            except ValueError:
+                sys.stderr.write(
+                    f"gate_g1: skipping {row['workload']} B2: "
+                    f"non-numeric hslot_frac {v!r}\n")
+                continue
     return out
 
 
@@ -97,6 +103,15 @@ def selftest():
         if row["config"] == "B2" and row["workload"] not in {"leela"}:
             rows[row["workload"]] = float(row["hslot_frac"])
     assert rows == {"lbm": 0.10}, rows
+    # A non-numeric hslot_frac cell is skipped, not fatal.
+    import tempfile, os as _os
+    fd, path = tempfile.mkstemp(suffix=".csv")
+    with _os.fdopen(fd, "w") as fh:
+        fh.write("# comment\nworkload,config,hslot_frac\n"
+                 "good,B2,0.05\nbad,B2,N/A\n")
+    parsed = load_b2_memintensive(path, set())
+    _os.unlink(path)
+    assert parsed == {"good": 0.05}, parsed
     print("gate_g1 selftest: OK")
     return 0
 
