@@ -129,3 +129,53 @@ handoff items gated behind **G0 PASSED**.
    when `aggregate_hslot.py` writes a row with a missing denominator. Final code
    skips those cells with a stderr warning rather than crashing, so the evaluator
    degrades gracefully on partial data.
+
+## Post-review fixes and findings (Phase 1-fix)
+
+These landed after the initial Phase 1 build during a correctness review, before
+any cluster data existed (so no measured numbers were invalidated).
+
+### Fix A — run_se.py warmup/measure windowing (gem5 `d2e6076`)
+`BaseCPU` schedules its instruction-stop event exactly once, in `init()`, from
+`params().max_insts_any_thread` captured at `m5.instantiate()`. The measured O3
+core is `switched_out` at that point with the default `0`, so **no stop was ever
+scheduled for it**. The old code set `system.o3.max_insts_any_thread` *after*
+`m5.instantiate()`, which is a no-op — the warmup `m5.simulate()` therefore ran
+to program completion and the measure phase returned immediately. Every measured
+run would have been invalid. Fixed to use `system.o3.scheduleInstStop(0, insts,
+cause)` (exit at current committed-inst-count + insts) for both the warmup and
+measure phases. The fast-forward phase was already correct (its count is set on
+the Atomic core *before* instantiate, so `init()` reads it).
+
+### Fix C — H_slot denominator excluded write-drain (gem5 `cd0624e`)
+`MemCtrl::chooseNext` is invoked for the read queue (bus state READ) **and** for
+each write queue during write drain (bus state WRITE); the `frfcfs` branch had no
+guard, so `++stats.schedCycles` — the H_slot **denominator** — fired on
+write-drain scheduling decisions too. There a write is a non-prefetch, so it read
+as `DEMAND_READY` (or `NO_PREFETCH`), inflating the denominator and the
+decomposition and **systematically understating H_slot in proportion to write
+traffic**. The accounting was extracted into `MemCtrl::recordHslotAccounting` and
+gated to `busState == READ` (the read `chooseNext` is always called under
+busState READ, the write one under WRITE), so `schedCycles` is now exactly the
+count of *read-scheduling decisions*. The command-ready predicate (`packetReady`)
+and the pure `dprh::classifyHslotCycle`/`hslotAgedBlocked` verdicts are unchanged.
+
+### Finding D — Phase 1 measures an ACCEPT-ALL upper bound, not an MSF-filtered stream
+`DprhFilter::accept()` returns `cachedAccuracy >= acceptPct`; `cachedAccuracy`
+initializes to 100 and is only recomputed from `used`/`evicted`. But
+`noteUseful`/`noteEvicted` have **zero call sites** — the LLC used/evicted feedback
+was never wired (Phase-0 Task 13 was conditionally skipped; see
+`plan/refs/option_b_limitations.md`). So accuracy stays pinned at 100, and with the
+default `filter_accept_pct = 50` the filter **accepts every prefetch**.
+
+Implications for reporting:
+- B1/B2 measure H_slot over the *full* prefetcher stream — an **accept-all upper
+  bound** on the harvestable opportunity. A real MSF-like filter would drop
+  low-accuracy prefetches and reshape (generally shrink) the accepted stream.
+- With the filter inert, **B1 and B2 currently differ only by `demand_first`**.
+- **Decision:** keep accept-all for Phase 1 characterization (matches plan D2:
+  "start Phase 1 with Option B to unblock characterization; upgrade to Option A
+  before final Phase 2 numbers"). All H_slot numbers and the Gate G1 verdict are
+  to be labelled an **upper bound** (see the caveat recorded in
+  `results/PHASE_LOG.md`). Wiring the feedback (Task 13) is deferred to before the
+  final Phase 2 numbers.
