@@ -400,6 +400,36 @@ prefetch row-hit rate = prefetchRowHits / prefetchReadLatency::samples
 aged-demand frac      = agedDemandBlocked / schedCycles   (upper bound; see note)
 ```
 
+### Measurement caveats (Phase 1-fix — READ BEFORE INTERPRETING H_slot)
+
+Every H_slot number and the Gate G1 verdict depend on these:
+
+1. **`schedCycles` = READ-scheduling DECISIONS, not clock ticks or write cycles**
+   (gem5 `cd0624e`). `chooseNext` runs for the read queue (bus state READ) and,
+   during write drain, for the write queue (bus state WRITE). The H_slot
+   accounting is now gated to the READ bus state, so `schedCycles` counts only
+   read-scheduling decisions — the correct H_slot denominator. It is a
+   *per-decision* rate (one count per `nextReqEvent` reaching FR-FCFS read
+   arbitration), NOT a fraction of wall-clock time. Before the fix, write-drain
+   decisions inflated the denominator and the DEMAND_READY/NO_PREFETCH bins,
+   understating H_slot in proportion to write traffic.
+
+2. **H_slot is an ACCEPT-ALL upper bound, not an MSF-filtered measurement**
+   (finding D). The Option-B filter's accuracy feedback (`noteUseful` /
+   `noteEvicted`) is not wired, so `DprhFilter::accept()` accepts every prefetch
+   (accuracy pinned at 100 ≥ `filter_accept_pct` 50). B1/B2 characterize H_slot
+   over the full prefetcher stream — an **upper bound**; a real MSF-like filter
+   would drop low-accuracy prefetches and generally lower H_slot. With the filter
+   inert, **B1 and B2 differ only by `demand_first`** in Phase 1. Label every
+   reported H_slot and the Gate G1 verdict "accept-all upper bound"; wiring the
+   feedback (Task 13) is deferred to before final Phase 2 numbers (plan D2). See
+   `docs/phase1-implementation-log.md` → "Finding D".
+
+3. **Measure window integrity** (gem5 `d2e6076`): the `--measure` instruction
+   window is real only because run_se.py now uses `scheduleInstStop`. Handoff step
+   **P1b** (`check_inst_window.py`) guards it — run it after every gem5 rebuild
+   before trusting any measured stat.
+
 ### Pre-registered R8 pressure metric
 
 - **Metric:** `system.mem_ctrl.dram.busUtil` (DRAM channel utilization, %)
