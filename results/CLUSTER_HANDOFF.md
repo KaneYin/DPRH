@@ -274,6 +274,34 @@ After success: record the build host and log tail in `results/PHASE_LOG.md`.
 
 ---
 
+### P1b — Instruction-window smoke (guards the run_se warmup/measure fix)
+
+Fast regression guard for the run_se.py warmup/measure windowing (gem5
+`d2e6076`). Before that fix, the O3 `--measure` window did not exist (the
+post-instantiate `max_insts_any_thread` assignment was a no-op), so every
+measured H_slot number would have come from the wrong instruction window. This
+smoke confirms the measure phase runs the intended instruction count.
+
+Use a **long-running workload** (a SPEC binary — the tiny `hello` test-prog exits
+long before the window completes and would fail spuriously). Small windows keep it
+to a few minutes:
+
+```bash
+cd ~/DPRH
+gem5/build/X86/gem5.opt --outdir=results/runs/instwin \
+  gem5/configs/dprh/run_se.py --config B1 --prefetcher spp \
+  --cmd <one R2 SPEC binary> --options "<its args>" \
+  --ff-offset 1000000 --warmup 200000 --measure 300000
+python3 scripts/check_inst_window.py results/runs/instwin --expect 300000
+```
+
+Expected: `simInsts = ~300000 ... -> PASS`. A FAIL reporting ~0 (or the whole
+program) means the `scheduleInstStop` wiring regressed — fix `run_se.py` before
+P2/P3. `check_inst_window.py --selftest` runs on any machine (no gem5) and is the
+CI-side unit check for the tolerance logic.
+
+---
+
 ### P2 — Synthetic 3×3 H_slot attribution factorial (RUN BEFORE P3)
 
 Drive the R6 synthetic factorial **before** the real-trace sweep; it is fast and
