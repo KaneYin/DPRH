@@ -120,6 +120,28 @@ jobs:
               working-directory: gem5
               run: ./build/X86/gem5.opt --build-info
 
+            - name: DPRH config elaboration smoke
+              # Actually run m5.instantiate() on both DPRH configs so port/param
+              # wiring bugs are caught in CI instead of on the cluster. This is
+              # the gap that let read_buffer_size (wrong SimObject), the X86 APIC
+              # bus placement, and the switched-CPU topology through -- none are
+              # visible to the build or the gtests, only to elaboration. A tiny
+              # workload + a 1-instruction measure window keeps it to seconds
+              # while exercising instantiate + switchCpus + a real read/switch.
+              working-directory: gem5
+              run: |
+                  set -euo pipefail
+                  HELLO=tests/test-progs/hello/bin/x86/linux/hello
+                  ./build/X86/gem5.opt --outdir=/tmp/elab_se \
+                      configs/dprh/run_se.py --config B1 --prefetcher spp \
+                      --cmd "$HELLO" --ff-offset 0 --warmup 0 --measure 1
+                  ./build/X86/gem5.opt --outdir=/tmp/elab_tgen \
+                      configs/dprh/run_trafficgen.py --config B1 \
+                      --demand-period 1000 --pf-seq-pkts 4 --pf-tag --period 100000
+                  test -s /tmp/elab_se/stats.txt
+                  test -s /tmp/elab_tgen/stats.txt
+                  echo "DPRH elaboration smoke: OK"
+
             - name: ccache stats
               if: always()
               run: ccache -s
