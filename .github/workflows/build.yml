@@ -128,7 +128,10 @@ jobs:
               # visible to the build or the gtests, only to elaboration. A tiny
               # workload + a 1-instruction measure window keeps it to seconds
               # while exercising instantiate + switchCpus + a real read/switch.
+              # This job runs in a container, where the default shell is `sh`
+              # (dash) -- which lacks `set -o pipefail`; pin to bash explicitly.
               working-directory: gem5
+              shell: bash
               run: |
                   set -euo pipefail
                   HELLO=tests/test-progs/hello/bin/x86/linux/hello
