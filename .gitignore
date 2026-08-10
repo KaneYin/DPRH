@@ -11,6 +11,8 @@ benchmarks/spec*/
 results/runs/
 m5out/
 *.log
+# Local Lakeshore research journal (contains NetID paths and run excerpts)
+results/CLUSTER_RESEARCH_JOURNAL.local.md
 # The dissertation PDF is a local reference, not committed
 Le - Generation Memory Systems*.pdf
 
