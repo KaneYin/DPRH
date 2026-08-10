@@ -79,15 +79,21 @@ added a trivial const getter.
 - L2 8-way (DPRH §3.2) vs 4-way (MSF)
 - DDR4_2400_16x4 (DPRH) vs DDR4-3200 (MSF)  [ ] revisit if D-A0b flips
 
-## V1 (PREFETCH flag reaches MemCtrl) — AWAITING CLUSTER
+## V1 (PREFETCH flag reaches MemCtrl) — FAILED; REPAIR AWAITING CLUSTER
 - Procedure: HANDOFF C2·V1 (front gate). [FIX-3: moved to first data-producing
   slot; permanent prefetchEnqueued counter replaces the removable temp probe.]
-- Code-path analysis (macOS): Cache::createMissPacket (cache.cc:552, re-verified
-  by FIX-3; log previously said 553 -- 1-line drift) does `new Packet(cpu_pkt->
-  req, cmd, blkSize)`, reusing the originating req; isPrefetch() reads
-  req->isPrefetch(), so the PREFETCH flag is EXPECTED to survive to the MC
-  without a forwarding patch. Confirm empirically on cluster (HANDOFF C2·V1).
-- No forwarding patch committed (none expected; apply only if cluster count==0).
+- Cluster result (2026-08-09, gem5 `1aa651d01a`): L2 SPP `pfIssued = 499`,
+  `system.mem_ctrl.prefetchEnqueued = 0` -- **FAIL**. C3+ remains blocked.
+- Corrected root cause: `Queued::DeferredPacket::createPkt` constructed the
+  hardware-prefetch `Request` with flags `0`. `HardPFReq` identified it only in
+  the initial packet; `Cache::createMissPacket` later replaced that command with
+  a normal read while reusing the still-unmarked Request. The earlier analysis
+  correctly observed RequestPtr reuse but incorrectly assumed the source
+  Request was already marked.
+- Repair authored: add default-false
+  `QueuedPrefetcher.mark_request_as_prefetch`; set `Request::PREFETCH` at request
+  creation when enabled; enable it only in DPRH SPP/Stride profiles. This keeps
+  stock queued-prefetcher behavior unchanged. Rebuild and rerun HANDOFF C2·V1.
 
 ## FIX-3 (HIGH) — front-load V1 with a permanent prefetch-enqueue counter
 ### Root cause / risk (evidence in source)
@@ -95,8 +101,9 @@ V1 (does the PREFETCH flag reach the MC?) sat at C6, behind B1/B2 work and behin
 a TEMP probe that had to be re-applied + rebuilt to run. If the flag were lost,
 the Option B filter (mem_ctrl.cc:219, gated on pkt->req->isPrefetch()) and every
 prefetch-classified stat are dead code, and C7-C16 produce plausible garbage.
-The survival basis is real but was unconfirmed at runtime: cache.cc:552 reuses
-the originating req in the miss packet, so the flag rides along by construction.
+The original survival argument was incomplete: cache.cc:553 reuses the
+originating request, but the queued hardware-prefetch source constructed that
+request with flags `0`. The 2026-08-09 cluster run exposed this source-side gap.
 ### Fix (applied)
 - Added permanent counter `prefetchEnqueued` incremented at the MC read-queue
   enqueue site (addToReadQueue, before the Option B filter so it is independent
@@ -109,6 +116,8 @@ the originating req in the miss packet, so the flag rides along by construction.
 - Test that would have caught the bug: prefetchEnqueued > 0 is the assertion; it
   is exercised by the C2·V1 gate on the cluster (a from-cold SE run is required,
   which the macOS author machine cannot do).
+- CI now repeats the full hello/SPP V1 path and requires both `pfIssued > 0` and
+  `prefetchEnqueued > 0`, so source-side provenance regressions fail the build.
 - Invariants held: no DRAM timing logic, no write-drain change, flags default off
   (the counter is unconditional but read-only accounting).
 

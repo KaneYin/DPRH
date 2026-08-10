@@ -88,7 +88,12 @@ After C1+C2: commit PHASE_LOG update (`dprh(phase0): cluster build wrapper; reco
 flag must survive from the L2 prefetcher down to the MemCtrl; if it does not, the
 Option B filter and *every* prefetch-classified stat (H_slot included) are dead
 code and C3–C17 produce plausible-looking garbage. Uses the permanent
-`prefetchEnqueued` counter (FIX-3) — no temp probe or extra rebuild needed.
+`prefetchEnqueued` counter (FIX-3), so no temporary probe is required.
+
+The first cluster run at gem5 `1aa651d01a` failed with `pfIssued = 499` and
+`prefetchEnqueued = 0`: queued hardware prefetches used `HardPFReq` but their
+underlying Request had flags `0`. The source-marking repair changes C++ and
+generated SimObject parameters, so rebuild `gem5.opt` before rerunning this gate.
 ```bash
 ./gem5/build/X86/gem5.opt --outdir=m5out/v1 gem5/configs/dprh/run_se.py \
   --config B1 --prefetcher spp \
@@ -103,9 +108,9 @@ Verdict (self-contained — this run also exercises prefetch issue, folding in C
 - **FAIL, prefetch-issued == 0**: the L2 prefetcher issued nothing — a wiring bug
   in `run_se.py` (prefetch_on_access / wrong cache), NOT a flag drop. Fix wiring
   (old C5), rebuild, re-run this gate.
-- **FAIL, prefetch-issued > 0 but `prefetchEnqueued == 0`**: the flag is lost en
-  route. STOP. Diagnose per FIX-3 step 3 (LLC miss path vs membus vs trafficgen
-  tagging), patch flag forwarding minimally, rebuild, re-run this gate.
+- **FAIL, prefetch-issued > 0 but `prefetchEnqueued == 0`**: the persistent
+  Request provenance is absent. STOP. Inspect both hardware-prefetch Request
+  creation and cache forwarding, patch minimally, rebuild, and re-run this gate.
 Do not proceed while either FAIL holds.
 
 ### C3 — Task 3 Step 3: B0 config elaborates and runs

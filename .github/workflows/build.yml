@@ -145,6 +145,29 @@ jobs:
                   test -s /tmp/elab_tgen/stats.txt
                   echo "DPRH elaboration smoke: OK"
 
+            - name: DPRH V1 prefetch-provenance smoke
+              working-directory: gem5
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  HELLO=tests/test-progs/hello/bin/x86/linux/hello
+                  ./build/X86/gem5.opt --outdir=/tmp/v1_se \
+                      configs/dprh/run_se.py --config B1 --prefetcher spp \
+                      --cmd "$HELLO" --ff-offset 0 --warmup 0 --measure 5000000
+                  STATS=/tmp/v1_se/stats.txt
+                  test -s "$STATS"
+                  awk '
+                      $1 == "system.cpu.l2cache.prefetcher.pfIssued" && $2 > 0 { found = 1 }
+                      END { exit !found }
+                  ' "$STATS"
+                  awk '
+                      $1 == "system.mem_ctrl.prefetchEnqueued" && $2 > 0 { found = 1 }
+                      END { exit !found }
+                  ' "$STATS"
+                  grep -E 'system.cpu.l2cache.prefetcher.pfIssued|system.mem_ctrl.prefetchEnqueued' \
+                      "$STATS"
+                  echo "DPRH V1 prefetch provenance: OK"
+
             - name: ccache stats
               if: always()
               run: ccache -s
