@@ -199,10 +199,16 @@ Expected: all `OK`.
 ### C12 — Task 10 Step 4: Traffic-gen row-locality calibration sweep
 ```bash
 for n in 1 4 16; do ./gem5/build/X86/gem5.opt --outdir=m5out/cal_$n \
-  gem5/configs/dprh/run_trafficgen.py --demand-period 1000 --pf-seq-pkts $n --pf-tag; done
+  gem5/configs/dprh/run_trafficgen.py --calibration-pf-only \
+  --pf-period 1000 --pf-seq-pkts $n --pf-tag; done
 python3 scripts/analyze_calibration.py m5out/cal_1 m5out/cal_4 m5out/cal_16
 ```
 Expected: PASS — DRAM row-hit rate strictly increases with `num_seq_pkts`.
+The calibration is prefetch-only because `readRowHitRate` is an aggregate DRAM
+stat; mixing the demand generator into this gate confounds the knob with
+cross-stream RNG correlation and FR-FCFS interference. A flat step is a FAIL,
+not a weak pass, because the authored low/medium/high levels are then not
+experimentally distinguishable.
 
 ### C13 — Task 10 Step 5: Confirm prefetch tag seen at MC (synthetic)
 ```bash

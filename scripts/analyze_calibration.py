@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Verify the traffic-gen row-locality knob (num_seq_pkts) is real and monotonic.
+"""Verify the traffic-gen row-locality knob is real and strictly monotonic.
 
 Reads a set of gem5 stats.txt files produced by a --pf-seq-pkts sweep (via
 gem5/configs/dprh/run_trafficgen.py) and asserts that the measured DRAM read
-row-hit rate rises monotonically with num_seq_pkts. Prints a
+row-hit rate rises strictly with num_seq_pkts. Prints a
 (seq_pkts -> row_hit_rate) table and a PASS/FAIL.
 
 Usage:
     analyze_calibration.py <outdir1> <outdir2> ... [--stat NAME]
+    analyze_calibration.py --selftest
 
 Each <outdir> is a gem5 --outdir containing stats.txt. The num_seq_pkts value
 is inferred from the directory name (expects a trailing integer, e.g. cal_16),
@@ -48,15 +49,38 @@ def infer_seq_pkts(outdir, fallback):
     return int(m.group(1)) if m else fallback
 
 
+def strictly_increasing(values):
+    """Return True only when every adjacent calibration level increases."""
+    return len(values) >= 2 and all(
+        b > a for a, b in zip(values, values[1:])
+    )
+
+
+def selftest():
+    assert strictly_increasing([10.0, 20.0, 30.0])
+    assert not strictly_increasing([])
+    assert not strictly_increasing([10.0])
+    assert not strictly_increasing([10.0, 10.0, 30.0])
+    assert not strictly_increasing([10.0, 9.0, 30.0])
+    print("analyze_calibration selftest: OK")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("outdirs", nargs="+", help="gem5 outdirs with stats.txt")
+    ap.add_argument("outdirs", nargs="*", help="gem5 outdirs with stats.txt")
     ap.add_argument(
         "--stat",
         default=None,
         help="override stat name (default tries readRowHitRate then pageHitRate)",
     )
+    ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
+    if len(args.outdirs) < 3:
+        ap.error("at least three gem5 outdirs are required")
 
     stat_names = [args.stat] if args.stat else DEFAULT_STATS
 
@@ -85,17 +109,18 @@ def main():
 
     vals = [v for _, v, _ in rows]
     monotonic = all(b >= a for a, b in zip(vals, vals[1:]))
-    strictly = all(b > a for a, b in zip(vals, vals[1:]))
+    strictly = strictly_increasing(vals)
 
     print()
     if strictly:
         print("PASS: read row-hit rate STRICTLY increases with num_seq_pkts.")
         return 0
     if monotonic:
-        print("PASS (weak): row-hit rate is non-decreasing with num_seq_pkts.")
-        print("Note: plan expects strictly increasing; investigate if a step "
-              "is flat (may indicate saturation or too-small a sweep gap).")
-        return 0
+        print("FAIL: row-hit rate is non-decreasing but not STRICTLY "
+              "increasing.")
+        print("A flat step means two authored locality levels are not "
+              "experimentally distinguishable; recalibrate before G0.")
+        return 1
     print("FAIL: row-hit rate is NOT monotonic in num_seq_pkts -- the knob is "
           "not behaving as a row-locality control.")
     return 1

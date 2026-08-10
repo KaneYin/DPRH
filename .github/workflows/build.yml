@@ -51,6 +51,9 @@ jobs:
               with:
                   submodules: recursive
 
+            - name: Calibration analyzer self-test
+              run: python3 scripts/analyze_calibration.py --selftest
+
             - name: Install ccache
               # Put ccache's compiler shims (/usr/lib/ccache/{gcc,g++}) on PATH
               # so gem5 transparently compiles through ccache. gem5's SConstruct
@@ -140,9 +143,23 @@ jobs:
                       --cmd "$HELLO" --ff-offset 0 --warmup 0 --measure 1
                   ./build/X86/gem5.opt --outdir=/tmp/elab_tgen \
                       configs/dprh/run_trafficgen.py --config B1 \
-                      --demand-period 1000 --pf-seq-pkts 4 --pf-tag --period 100000
+                      --demand-period 1000 --pf-period 1000 \
+                      --pf-seq-pkts 4 --pf-tag --period 100000
+                  ./build/X86/gem5.opt --outdir=/tmp/elab_tgen_cal \
+                      configs/dprh/run_trafficgen.py --config B1 \
+                      --calibration-pf-only --pf-period 1000 \
+                      --pf-seq-pkts 4 --pf-tag --period 100000
                   test -s /tmp/elab_se/stats.txt
                   test -s /tmp/elab_tgen/stats.txt
+                  test -s /tmp/elab_tgen_cal/stats.txt
+                  awk '
+                      $1 == "system.demand_mon.totalReadBytes" && $2 == 0 { found = 1 }
+                      END { exit !found }
+                  ' /tmp/elab_tgen_cal/stats.txt
+                  awk '
+                      $1 == "system.mem_ctrl.prefetchEnqueued" && $2 > 0 { found = 1 }
+                      END { exit !found }
+                  ' /tmp/elab_tgen_cal/stats.txt
                   echo "DPRH elaboration smoke: OK"
 
             - name: DPRH V1 prefetch-provenance smoke

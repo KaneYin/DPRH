@@ -60,6 +60,14 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
    outbound miss packet reuses the same `req`, so the PREFETCH flag is *expected*
    to survive to the MC without a forwarding patch — but this is left for the
    cluster to confirm empirically; no patch committed. (Task 5)
+6. **Synthetic calibration isolation**: the initial dual-stream cluster sweep
+   produced non-monotonic aggregate row-hit rates because the DRAM statistic
+   mixed demand and prefetch traffic, while both generators used the same
+   default RNG seed and cadence. `--calibration-pf-only` now isolates the
+   controlled prefetch stream; `--pf-period` keeps its injection rate independent
+   from demand pressure in the retained dual-stream H_slot harness. A flat
+   calibration step is rejected because it does not provide distinguishable
+   low/medium/high locality levels. (Task 10)
 
 ## Key interfaces added
 - `DprhFilter` (`gem5/src/mem/dprh_filter.hh`): `accept()`, `noteUseful()`,

@@ -72,6 +72,9 @@ handoff items gated behind **G0 PASSED**.
   `ctrl.dprh_a_guard` (`gem5/configs/dprh/dprh_common.py`)
 - `--a-guard` CLI argument added to `gem5/configs/dprh/run_se.py` and
   `gem5/configs/dprh/run_trafficgen.py`
+- `run_trafficgen.py` separates `--demand-period` from the fixed
+  `--pf-period`; `--calibration-pf-only` isolates the prefetch locality knob
+  from aggregate demand traffic during the G0 calibration gate.
 
 ### Analysis scripts (repo root)
 - `scripts/hslot_factorial.sh` — drive the synthetic 3×3 R6 factorial (B1 & B2)

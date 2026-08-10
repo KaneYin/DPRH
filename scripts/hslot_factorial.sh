@@ -18,6 +18,9 @@ mkdir -p "$OUT_ROOT"
 PERIODS=(250 1000 4000)      # high / med / low demand intensity (ticks)
 SEQ=(1 4 16)                 # low / med / high prefetch row-locality density
 CONFIGS=(B1 B2)
+# Keep the prefetch injection rate fixed while demand pressure changes. Before
+# the calibration fix, --demand-period silently controlled both generators.
+PF_PERIOD=1000
 
 for cfg in "${CONFIGS[@]}"; do
   for per in "${PERIODS[@]}"; do
@@ -25,7 +28,8 @@ for cfg in "${CONFIGS[@]}"; do
       out="${OUT_ROOT}/${cfg}_p${per}_s${seq}"
       echo "[factorial] ${cfg} period=${per} seq=${seq} -> ${out}"
       "$GEM5" --outdir="$out" "$CFG_SCRIPT" \
-        --config "$cfg" --demand-period "$per" --pf-seq-pkts "$seq" \
+        --config "$cfg" --demand-period "$per" --pf-period "$PF_PERIOD" \
+        --pf-seq-pkts "$seq" \
         --pf-tag --a-guard "$A_GUARD"
     done
   done
