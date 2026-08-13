@@ -13,9 +13,10 @@ All instrumentation is read-only accounting. The state-mutating DRAM command
 issue/timing-update path, write-drain policy, and `dprh_common.FROZEN` values are
 unchanged. A later correctness repair adds a const DRAM query that reads the
 existing FR-FCFS refresh/bank/column state; it does not implement timing state.
-Authoring and unit tests were done on macOS and exercise on CI; all measured runs
-(real-trace sweep, factorial cluster runs, Gate G1 verdict) are `[cluster]`
-handoff items gated behind **G0 PASSED**.
+Authoring and static checks were done on macOS. Fix E's gem5 build, 13 H_slot
+unit tests, and mixed-B1 regression passed on the Linux cluster; real-trace
+sweeps, factorial Phase-1 runs, and Gate G1 remain `[cluster]` handoff items
+gated behind **G0 PASSED**.
 
 ## Git layout
 - gem5 tree edits (`gem5/src/**`, `gem5/configs/dprh/**`) are committed **inside
@@ -48,7 +49,7 @@ handoff items gated behind **G0 PASSED**.
 | 7 Real-trace per-workload aggregation | COMPLETE (author) | outer `cceb5f9`; selftest passes macOS; cluster data awaited |
 | 8 Gate G1 evaluation scaffold | COMPLETE (author) | outer `4283882`, `cbbb89e`; selftest passes macOS; verdict AWAITING CLUSTER |
 | 9 Bookkeeping (this log, PHASE_LOG, CLUSTER_HANDOFF) | COMPLETE (author) | outer repo; this commit |
-| 10 Correct singleton denominator + command readiness | AUTHORED / cluster | const FR-FCFS-state query and six discriminating tests; rebuild/rerun pending |
+| 10 Correct singleton denominator + command readiness | COMPLETE (cluster) | gem5 `72137d00b0`; 13 tests + mixed B1 C18 PASS; repaired H_slot `8.041746%` |
 
 ## Key interfaces added
 
@@ -254,7 +255,8 @@ old shortcuts:
 6. mixed demand/prefetch queue is harvestable only while no demand command is
    ready.
 
-The author machine does not build gem5. Acceptance therefore requires the
-cluster to rebuild `gem5.opt` and `unittests.opt`, run `dprh_hslot.test.opt`, and
-rerun the identical mixed B1 command. Only the post-repair counters replace the
-retired `34.22%` observation.
+Cluster acceptance passed on `a-019`: `gem5.opt` and `unittests.opt` returned 0,
+all 13 `dprh_hslot.test.opt` cases passed, and the identical mixed B1 run exited
+0 after its exact 5,000,000-instruction measurement. The replacement counters
+close all accounting identities and yield `50,286 / 625,312 = 8.041746%`; the
+retired `34.22%` observation remains invalid.

@@ -452,6 +452,72 @@ Every H_slot number and the Gate G1 verdict depend on these:
    evidence; only a cluster rebuild plus identical post-repair run may supply a
    replacement H_slot fraction. See `docs/phase1-implementation-log.md`, Fix E.
 
+### C18 repaired mixed B1 accounting — FULL PASS (2026-08-13)
+
+Cluster output from the repaired code (`gem5` `72137d00b0`, pinned by outer
+`6d43609`) reports:
+
+```text
+compute host: a-019
+gem5 compiled: 2026-08-13 10:33:38
+gem5_build=0 unit_build=0 hslot_test=0
+[  PASSED  ] 13 tests.
+mixed exit code: 0
+[dprh] ff exit: a thread reached the max instruction count
+[dprh] warmup exit: dprh warmup complete
+[dprh] measure exit: dprh measure complete
+[dprh] done config=B1 prefetcher=spp @ tick 131193547500
+```
+
+Artifacts:
+
+```text
+m5out/micro_mixed_b1_hslot_command_ready_72137d00b0_20260813_103949/
+results/micro_mixed_b1_hslot_command_ready_72137d00b0_20260813_103949.log
+results/build_hslot_command_ready.log
+```
+
+All six new discriminating cases and the seven existing H_slot predicate tests
+pass. The complete provided simulator transcript contains no panic, fatal,
+assertion, abort, or backtrace. Reported stats:
+
+| Stat | Value |
+|---|---:|
+| `simInsts` | 5,000,000 |
+| `system.llc.demandMisses::total` | 623,531 |
+| `system.cpu.l2cache.prefetcher.pfIssued` | 1,228,072 |
+| `system.mem_ctrl.prefetchEnqueued` | 232,573 |
+| `system.mem_ctrl.schedCycles` | 625,312 |
+| `system.mem_ctrl.cyclesNoLegalDemand` | 567,911 |
+| `system.mem_ctrl.cyclesHslot` | 50,286 |
+| `system.mem_ctrl.cyclesReadyPrefetchNoDemand` | 59,867 |
+| `system.mem_ctrl.cyclesHslotUpperGap` | 9,581 |
+| `nonHslotReason::demand_ready` | 57,401 |
+| `nonHslotReason::no_prefetch` | 508,044 |
+| `nonHslotReason::pf_not_rowhit` | 9,581 |
+| `nonHslotReason::turnaround_unsafe` | 0 (`nozero`, omitted) |
+
+The repaired accounting partitions close exactly:
+
+```text
+625,312 = 57,401 + 567,911
+59,867  = 50,286 + 9,581
+567,911 = 50,286 + 508,044 + 9,581 + 0
+```
+
+Therefore the replacement descriptive mixed-B1 value is:
+
+```text
+H_slot fraction = 50,286 / 625,312 = 8.041746%
+```
+
+The instruction/prefetch data-path counters are identical to the pre-repair
+run, supporting the intended accounting-only change. Verdict: **C18 FULL PASS**
+for build, unit tests, complete mixed-B1 execution, accounting boundaries, and
+the replacement descriptive measurement. This B1 accept-all microbenchmark
+observation is not a B2 real-trace median and has no standing as G0 or G1
+evidence.
+
 ### Pre-registered R8 pressure metric
 
 - **Metric:** `system.mem_ctrl.dram.busUtil` (DRAM channel utilization, %)
