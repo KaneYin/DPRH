@@ -129,8 +129,10 @@ request with flags `0`. The 2026-08-09 cluster run exposed this source-side gap.
 - Cluster verification: HANDOFF C7 (diff b1_smoke vs b1_after6 -> no diff).
 
 ## Phase 1 stats framework (Task 9) — authored; presence check is [cluster] C11
-- Populated in Phase 0 (computed with existing packetReady/burstReady only, no
-  parallel timing model, no DRAMInterface edits):
+- Initially populated in Phase 0 with `packetReady/burstReady`; the later
+  command-readiness repair supersedes that shortcut with a const query over
+  existing DRAM FR-FCFS state. It still adds no parallel timing model and does
+  not mutate timing state:
     schedCycles, cyclesNoLegalDemand, cyclesHslot, cyclesReadyPrefetchNoDemand,
     cyclesHslotUpperGap, nonHslotReason[DEMAND_READY|NO_PREFETCH|PF_NOT_ROWHIT
     |TURNAROUND_UNSAFE], turnaroundUnsafe, demandReadLatency,
@@ -144,9 +146,11 @@ request with flags `0`. The 2026-08-09 cluster run exposed this source-side gap.
   demandRowHits, prefetchRowHits, nonHslotReason[AGED_DEMAND]. [FIX-1: the
   row-hit-dependent items are no longer deferred — reading DRAM open-row state
   READ-ONLY does not touch the timing-logic invariant; see FIX-1.]
-- H_slot predicate: the demand side is in MemCtrl::hasLegalDemand; the full
-  cycle verdict (prefetch/row-hit/turnaround side) is the pure, unit-tested
-  dprh::classifyHslotCycle in mem/dprh_hslot.hh (added by FIX-1).
+- H_slot predicate: the command-readiness repair folds demand and prefetch
+  candidates through `MemInterface::isCommandReady` at FR-FCFS `min_col_at`;
+  the full queue summary/verdict is the pure, unit-tested
+  `dprh::observeHslotCandidate` + `classifyHslotCycle` pair in
+  `mem/dprh_hslot.hh`.
 - Cluster verification: HANDOFF C11 (all six grepped stats -> OK).
 
 ## FIX-1 (CRITICAL) — cyclesHslot did not measure H_slot
@@ -162,7 +166,7 @@ Conjunct → code location → present/absent (pre-fix):
 
 | conjunct                    | code                                    | status |
 |-----------------------------|-----------------------------------------|--------|
-| no timing-legal demand      | `!hasLegalDemand(queue,mem_intr)` :622   | PRESENT |
+| no timing-legal demand      | `!hasLegalDemand(queue,mem_intr)` :622   | PRESENT then; superseded by command-readiness repair |
 | ∃ prefetch p                | `mp->pkt->req->isPrefetch()` :631        | PRESENT |
 | timing-ready(p)             | `packetReady(mp, mem_intr)` :632         | PRESENT |
 | **row-hit(p)**              | *none* — loop 627-636 ignores open row   | **ABSENT (bug)** |
@@ -438,6 +442,15 @@ Every H_slot number and the Gate G1 verdict depend on these:
    window is real only because run_se.py now uses `scheduleInstStop`. Handoff step
    **P1b** (`check_inst_window.py`) guards it — run it after every gem5 rebuild
    before trusting any measured stat.
+
+4. **Pre-repair mixed B1 H_slot result is invalid.** The 2026-08-12 mixed run
+   produced `schedCycles=73,450`, `cyclesHslot=25,135`, and the derived
+   `34.22%`, but source review found that singleton queues bypassed accounting
+   and `packetReady/burstReady` checked rank refresh availability rather than
+   full FR-FCFS column-command readiness. Retire all three values. The same
+   run's instruction-driven data-path counters remain valid infrastructure
+   evidence; only a cluster rebuild plus identical post-repair run may supply a
+   replacement H_slot fraction. See `docs/phase1-implementation-log.md`, Fix E.
 
 ### Pre-registered R8 pressure metric
 

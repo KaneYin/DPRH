@@ -9,8 +9,10 @@ Phase 1 = characterization instrumentation: completing the H_slot decomposition
 with the aged-demand bin (AGED_DEMAND), adding the late-prefetch rate counter,
 populating the demand/prefetch row-hit split, writing a synthetic attribution
 surface (3×3 R6 factorial), an aggregation pipeline, and a Gate G1 scaffold.
-All instrumentation is read-only accounting; no `DRAMInterface`/`mem_interface`
-timing code, write-drain policy, or `dprh_common.FROZEN` value is touched.
+All instrumentation is read-only accounting. The state-mutating DRAM command
+issue/timing-update path, write-drain policy, and `dprh_common.FROZEN` values are
+unchanged. A later correctness repair adds a const DRAM query that reads the
+existing FR-FCFS refresh/bank/column state; it does not implement timing state.
 Authoring and unit tests were done on macOS and exercise on CI; all measured runs
 (real-trace sweep, factorial cluster runs, Gate G1 verdict) are `[cluster]`
 handoff items gated behind **G0 PASSED**.
@@ -23,7 +25,9 @@ handoff items gated behind **G0 PASSED**.
 - All Phase 1 commits use `dprh(phase1): <summary>`.
 
 ## Hard invariants held
-- `src/mem/dram_interface.cc`, `DRAMInterface.py`, `mem_interface.cc`: **untouched**.
+- DRAM command issue and timing-state updates: **untouched**. The command-ready
+  repair adds only a const query beside `chooseNextFRFCFS`, reusing
+  `minBankPrep`, `rdAllowedAt`/`wrAllowedAt`, and rank refresh state.
 - Write-drain policy / thresholds: **untouched**.
 - DPRH gate `dprhChooseNext`: Phase 0 **no-op** (`return queue.end()`) — unchanged.
 - All new Phase 1 stats are **read-only accounting** (no parallel timing model;
@@ -44,6 +48,7 @@ handoff items gated behind **G0 PASSED**.
 | 7 Real-trace per-workload aggregation | COMPLETE (author) | outer `cceb5f9`; selftest passes macOS; cluster data awaited |
 | 8 Gate G1 evaluation scaffold | COMPLETE (author) | outer `4283882`, `cbbb89e`; selftest passes macOS; verdict AWAITING CLUSTER |
 | 9 Bookkeeping (this log, PHASE_LOG, CLUSTER_HANDOFF) | COMPLETE (author) | outer repo; this commit |
+| 10 Correct singleton denominator + command readiness | AUTHORED / cluster | const FR-FCFS-state query and six discriminating tests; rebuild/rerun pending |
 
 ## Key interfaces added
 
@@ -58,6 +63,12 @@ handoff items gated behind **G0 PASSED**.
 - `dprh::hslotAgedBlocked(hslot, anyAgedDemand)` — true iff a true H_slot cycle
   also has an aged (≥ A_guard) queued demand; added to
   `gem5/src/mem/dprh_hslot.hh`; unit-tested in `dprh_hslot.test.cc` (new case)
+- `dprh::frfcfsCommandReady(...)` — pure final combination of existing rank
+  refresh, bank-preparation, and column-ready inputs
+- `dprh::shouldRecordHslotDecision(...)` — defines the denominator boundary:
+  every non-empty FR-FCFS READ arbitration, including singleton queues
+- `dprh::HslotCycleInputs` / `observeHslotCandidate(...)` — testable mixed-queue
+  reduction used directly by MemCtrl's accounting pass
 
 ### MemCtrl additions (gem5 tree)
 - `MemCtrl::hasAgedDemand(queue, mem_intr)` — returns true if any queued demand
@@ -182,3 +193,68 @@ Implications for reporting:
   to be labelled an **upper bound** (see the caveat recorded in
   `results/PHASE_LOG.md`). Wiring the feedback (Task 13) is deferred to before the
   final Phase 2 numbers.
+
+### Fix E — singleton decisions and command-level readiness (authored; cluster pending)
+
+#### Why this repair is required
+
+The first instruction-driven mixed B1 run reported
+`cyclesHslot/schedCycles = 25,135/73,450 = 34.22%`. Source review found two
+load-bearing defects, so that fraction is retired and must not be used:
+
+1. `MemCtrl::chooseNext` handled `queue.size() == 1` before entering the
+   FR-FCFS branch. `recordHslotAccounting` lived inside that later branch, so
+   every singleton demand and singleton prefetch decision was missing from both
+   numerator and denominator.
+2. `packetReady()` delegates to `burstReady()`. For DRAM, `burstReady()` checks
+   rank refresh availability only; it does not establish that the RD/WR column
+   command is legal at the FR-FCFS seamless-issue boundary. In particular, a
+   rank can be refresh-idle while the target bank's `rdAllowedAt` is still in
+   the future. Treating that request as ready manufactures or suppresses
+   H_slot observations depending on whether it is a demand or prefetch.
+
+These are measurement-validity defects, not scheduler-performance defects. The
+mixed run's data-path evidence (`demandMisses`, `pfIssued`, and
+`prefetchEnqueued`) remains useful, but its `schedCycles`, `cyclesHslot`, and
+derived `34.22%` do not.
+
+#### Minimal implementation and boundary
+
+- Accounting now occurs before the queue-size fast path and only when
+  `shouldRecordHslotDecision(queue.size(), policy==FRFCFS, bus==READ)` is true.
+  Thus singleton READ decisions count; FCFS, empty queues, and WRITE/write-drain
+  decisions do not.
+- `recordHslotAccounting` computes the exact `min_col_at` expression used by
+  `chooseNextFRFCFS`, including the caller's read/write-switch column delay.
+- `MemInterface::isCommandReady(pkt, min_col_at)` is a const observation seam.
+  `DRAMInterface` implements it from the existing rank refresh state,
+  `rdAllowedAt`/`wrAllowedAt`, open-row state, and the existing
+  `minBankPrep()` calculation. A singleton view is passed to `minBankPrep` so
+  another bank cannot answer for the candidate under test.
+- The production queue scan and unit tests share `HslotCycleInputs` and
+  `observeHslotCandidate`; a legal demand dominates, while a prefetch needs
+  command readiness, row hit, and a matching bus direction.
+- Actual request selection still follows the original singleton/FCFS/FR-FCFS
+  branches. `packetReady`, `chooseNextFRFCFS`, `doBurstAccess`, all timing-state
+  updates, bus-state transitions, and write-drain thresholds are unchanged.
+  `dprhChooseNext` remains a no-op.
+
+#### Discriminating regression cases
+
+`dprh_hslot.test.cc` now distinguishes the intended implementation from the two
+old shortcuts:
+
+1. command-ready singleton demand enters the denominator and blocks H_slot;
+2. command-ready singleton row-hit prefetch counts as H_slot;
+3. refresh-blocked rank is never command-ready;
+4. refresh-idle rank with `rdAllowedAt > min_col_at` is not ready, while equality
+   is ready;
+5. FR-FCFS READ is included but WRITE/write-drain, FCFS, and empty visits are
+   excluded;
+6. mixed demand/prefetch queue is harvestable only while no demand command is
+   ready.
+
+The author machine does not build gem5. Acceptance therefore requires the
+cluster to rebuild `gem5.opt` and `unittests.opt`, run `dprh_hslot.test.opt`, and
+rerun the identical mixed B1 command. Only the post-repair counters replace the
+retired `34.22%` observation.

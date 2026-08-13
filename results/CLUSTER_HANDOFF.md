@@ -240,6 +240,65 @@ Using results/smoke.csv, tests/dprh/test_v1_prefetch_flag.md, and the calibratio
 output, evaluate G0.a–G0.d and sign off in results/PHASE_LOG.md. See Task 14.
 DO NOT mark G0 PASSED until all four conditions are observed on the cluster.
 
+### C18 — H_slot singleton/command-readiness repair validation
+
+This is a measurement-validity regression and may run before G0 is signed. It
+does not evaluate G0 or G1. The old mixed B1 values
+`schedCycles=73,450`, `cyclesHslot=25,135`, and `34.22%` are retired.
+
+On a compute node, after syncing both repositories, rebuild the C++ binary and
+unit tests (do not reuse the pre-repair `gem5.opt`):
+
+```bash
+cd /mmfs1/scratch/yqu30/DPRH/gem5
+BUILD_JOBS="${SLURM_CPUS_PER_TASK:-1}"
+set -o pipefail
+scons build/X86/gem5.opt -j "${BUILD_JOBS}" 2>&1 | tee ../results/build_hslot_command_ready.log
+GEM5_BUILD_RC=${PIPESTATUS[0]}
+scons build/X86/unittests.opt -j "${BUILD_JOBS}" 2>&1 | tee -a ../results/build_hslot_command_ready.log
+UNIT_BUILD_RC=${PIPESTATUS[0]}
+./build/X86/mem/dprh_hslot.test.opt
+HSLOT_TEST_RC=$?
+printf 'gem5_build=%s unit_build=%s hslot_test=%s\n' "${GEM5_BUILD_RC}" "${UNIT_BUILD_RC}" "${HSLOT_TEST_RC}"
+```
+
+Expected: all three return codes are 0 and `dprh_hslot.test.opt` reports 13
+passing tests. The discriminating cases cover singleton demand, singleton
+row-hit prefetch, refresh block, future `rdAllowedAt`, READ/WRITE exclusion,
+and a mixed demand/prefetch queue.
+
+Then rerun the same instruction-driven mixed B1 workload used to expose the LLC
+PoC issue:
+
+```bash
+cd /mmfs1/scratch/yqu30/DPRH
+GEM5_SHA=$(git -C gem5 rev-parse --short HEAD)
+RUN_TAG="hslot_command_ready_${GEM5_SHA}_$(date +%Y%m%d_%H%M%S)"
+MIXED_OUT="m5out/micro_mixed_b1_${RUN_TAG}"
+MIXED_LOG="results/micro_mixed_b1_${RUN_TAG}.log"
+MICRO_BIN_ABS="$(pwd)/m5out/bin/dprh_memmix"
+set -o pipefail
+./gem5/build/X86/gem5.opt --outdir="${MIXED_OUT}" gem5/configs/dprh/run_se.py --config B1 --prefetcher spp --cmd "${MICRO_BIN_ABS}" --options "mixed 64 64 4 2000000000 1" --ff-offset 200000000 --warmup 1000000 --measure 5000000 2>&1 | tee "${MIXED_LOG}"
+MIXED_RC=${PIPESTATUS[0]}
+printf 'mixed_rc=%s\nOUT=%s\nLOG=%s\n' "${MIXED_RC}" "${MIXED_OUT}" "${MIXED_LOG}"
+```
+
+Acceptance checks:
+
+```bash
+grep -E '^(simInsts|system\.llc\.demandMisses::total|system\.cpu\.l2cache\.prefetcher\.pfIssued|system\.mem_ctrl\.prefetchEnqueued|system\.mem_ctrl\.schedCycles|system\.mem_ctrl\.cyclesNoLegalDemand|system\.mem_ctrl\.cyclesHslot) ' "${MIXED_OUT}/stats.txt"
+grep -E 'panic:|fatal:|Assertion|Program aborted|BACKTRACE' "${MIXED_LOG}" || true
+```
+
+Expected: exit code 0; no fatal-error match; `simInsts=5,000,000`; positive
+demand misses, `pfIssued`, `prefetchEnqueued`, and `schedCycles`; and
+`0 <= cyclesHslot <= cyclesNoLegalDemand <= schedCycles`. No direction or
+magnitude is pre-registered for the new fraction: both the singleton denominator
+and the stricter command-ready predicate changed, so the cluster result itself
+must determine the replacement. Record the new outdir, SHA, raw counters, and
+derived fraction in the local research journal; never compare against `34.22%`
+as if it were a valid baseline.
+
 ---
 
 ## Phase 1 — Characterization Handoff (P-series)
@@ -278,8 +337,8 @@ Expected:
   done
   ```
   Each must print `[  PASSED  ] N test(s).` with 0 failures. The
-  `dprh_late.test` (4 tests) and `dprh_hslot.test` (now 4 tests, including
-  the new aged-blocked case) are new in Phase 1.
+  `dprh_late.test` (4 tests) and `dprh_hslot.test` (13 tests, including the six
+  C18 command-readiness regressions) are part of Phase 1.
 
 After success: record the build host and log tail in `results/PHASE_LOG.md`.
 

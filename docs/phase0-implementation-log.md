@@ -15,8 +15,11 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
   `plan/refs/`, `.gitignore`) is committed in the **outer** repo on branch `v0`.
 - All commits use `dprh(phase0): <summary>`.
 
-## Hard invariants held
-- `src/mem/dram_interface.cc`, `DRAMInterface.py`, `mem_interface.cc`: **untouched**.
+## Hard invariants held during the initial Phase 0 implementation
+- `src/mem/dram_interface.cc`, `DRAMInterface.py`, `mem_interface.cc` were
+  initially untouched. **Later superseded by Phase-1 Fix E:** a const
+  command-readiness query now reads existing FR-FCFS/DRAM state; command issue
+  and timing-state updates remain untouched.
 - Write-drain policy / thresholds: **untouched**.
 - New gating flags `enable_dprh`/`demand_first`/`enable_filter`: default **False**.
 - DPRH gate `dprhChooseNext`: Phase 0 **no-op** (`return queue.end()`).
@@ -47,11 +50,10 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
    (co-located with the SConscript that registers it) instead of the plan's
    `tests/dprh/filter.test.cc`, per gem5 GTest convention and the plan's own
    Step-4 registration string. (Task 7)
-3. **Row-hit split stats** (`demandRowHits`/`prefetchRowHits`) are declared but
-   populated in Phase 1: computing them at the MC would require reading DRAM
-   bank open-row state, and `DRAMInterface` is a no-touch invariant. The
-   load-bearing, grepped stats (schedCycles/cyclesNoLegalDemand/cyclesHslot/
-   demand+prefetch latency histos/nonHslotReason) are populated in Phase 0. (Task 9)
+3. **Row-hit split stats** (`demandRowHits`/`prefetchRowHits`) were declared but
+   deferred to Phase 1 under an initial DRAM no-touch interpretation. Later
+   review established that const inspection of existing bank/timing state does
+   not alter the timing model; Phase-1 Fix E documents the final boundary. (Task 9)
 4. **`createDram` prefetch tag** passed **positionally** (15th arg) from
    `run_trafficgen.py`: `PyBindMethod("createDram")` binds the raw C++ pointer
    and does not surface C++ default args to Python. Stock in-tree callers use the
@@ -73,7 +75,8 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
 - `DprhFilter` (`gem5/src/mem/dprh_filter.hh`): `accept()`, `noteUseful()`,
   `noteEvicted()`, `accuracyPct()`. Option-A-replaceable behind the same call.
 - `MemCtrl::dprhChooseNext(queue, extra_col_delay, mem_intr)`: Phase 0 no-op gate.
-- `MemCtrl::hasLegalDemand(queue, mem_intr)`: H_slot predicate helper (unit-testable).
+- `MemCtrl::hasLegalDemand(queue, mem_intr)`: initial H_slot helper, removed by
+  Phase-1 Fix E because `burstReady` was rank-ready rather than command-ready.
 - MemCtrl params: `enable_dprh`, `demand_first`, `enable_filter`, `dprh_a_guard`,
   `dprh_kp`, `filter_accept_pct`, `filter_epoch` (all default-off/stock).
 - `DramGen` param `tag_prefetch` (default false) + `createDram` trailing arg.
