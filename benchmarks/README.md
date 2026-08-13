@@ -1,54 +1,118 @@
-# SPEC CPU benchmarks — gem5 SE-mode cross-compile notes (Task 11)
+# DPRH C microbenchmarks
 
-SPEC CPU2006 + CPU2017 are licensed but not committed to this repo (binaries and
-SPEC sources are git-ignored via `benchmarks/spec*/`). This file records how the
-SE-mode-runnable subset is built and which benchmarks are excluded, and defines
-the manifest that `scripts/mpki_profile.py` consumes.
+The project uses controlled C microbenchmarks rather than SPEC or another
+real-application suite.  This intentionally supports a design-space claim—when
+the harvestable prefetch-row-hit opportunity appears—not a claim about its
+prevalence in production workloads.
 
-> All build steps here are **[cluster]** (Linux, cross-compile toolchain). This
-> file is authored on macOS; fill the empty tables on the cluster after building.
+## Source and interface
 
-## A0 decision (see plan/refs/A0_findings.md)
-- Suites: **SPEC CPU2006 AND CPU2017** (single-benchmark components).
-- R2 selection criterion: **per-benchmark LLC MPKI >= 1** (DPRH's own criterion,
-  not MSF's set-level > 10). Profiling is done under config **B1** with the
-  **SPP** prefetcher.
+`micro/dprh_memmix.c` is the version-controlled source used by the full O3
+`run_se.py` experiments.  It has one fixed command-line shape:
 
-## Cross-compile requirements (SE mode)
-gem5 SE mode cannot fork/exec, JIT, or service arbitrary syscalls, so binaries
-must be **statically linked** and free of runtime fork/exec/JIT.
-
-Record on the cluster:
-- SPEC version(s): __________ (e.g. CPU2006 v1.2, CPU2017 v1.1)
-- Compiler + version: __________ (e.g. gcc 10.x, x86-64)
-- Flags: __________ (must include static linking, e.g. `-static -O2`)
-- libc: __________ (static glibc / musl)
-
-## Exclusions (SE-mode-incompatible) — REQUIRED thesis artifact (R2)
-List every benchmark excluded and why (Fortran runtime issues, fork/exec,
-unsupported syscalls, dynamic-only, etc.). Fill on the cluster:
-
-| Benchmark | Suite | Reason excluded |
-| --- | --- | --- |
-| (fill) | | |
-
-## Manifest for scripts/mpki_profile.py
-Create `benchmarks/benchmarks.tsv` (git-ignored with the binaries) with one
-runnable benchmark per line, tab-separated:
-
-```
-# name<TAB>binary_path<TAB>args
-bzip2_2006	benchmarks/spec2006/bin/bzip2	input.source 280
-lbm_2017	benchmarks/spec2017/bin/lbm	2000 reference.dat 0 0 100_100_130_ldc.of
-...
+```text
+dprh_memmix MODE STREAM_MIB RANDOM_MIB PATTERN_ARG BATCHES SEED
 ```
 
-`scripts/mpki_profile.py --benchmarks-dir benchmarks/` reads this manifest,
-runs each under B1/SPP for a fixed window, and emits `results/mpki_profile.csv`
-classifying each benchmark as R2_main (MPKI>=1), R3_control (MPKI<0.5), or
-middle.
+| Mode | Memory behavior | `PATTERN_ARG` |
+|---|---|---|
+| `stream` | unit-stride cache-line reads | sequential reads per batch |
+| `stride` | fixed cache-line stride | stride in cache lines |
+| `gather` | independent reads through a shuffled index array | reserved |
+| `chase` | serialized pointer cycle through shuffled cache lines | dependent steps per batch |
+| `mix` | streaming reads interleaved with one dependent chase | stream reads per chase |
+| `compute` | integer recurrence with no allocated working set | operations per batch |
+| `mixed` | legacy stream-plus-gather kernel used by C18 | sequential reads per batch |
 
-## Included / runnable set (fill after cross-compile)
-| Benchmark | Suite | Static? | Runs in SE? | Notes |
-| --- | --- | --- | --- | --- |
-| (fill) | | | | |
+`mixed` is retained only to reproduce the pre-G0 C18 accounting regression.
+New experiments use `mix`, whose random component is dependency-serialized as
+required by the research plan.
+
+The program initializes deterministic data from `SEED`, prints the effective
+parameters before entering the steady-state kernel, and accumulates all loaded
+values into a volatile sink.  `BATCHES` is deliberately much longer than the
+simulated region; `run_se.py` stops each phase by committed instruction count.
+
+## Frozen experiment manifest
+
+`micro/manifest.json` is the pre-registration artifact.  It freezes:
+
+- the identical 200M fast-forward, 1M warmup, and 5M measurement schedule;
+- the three Gate-G0 kernels (`stream_main`, `stride_main`, `mix_main`);
+- a 64 MiB serialized chase stress point;
+- two no-harm controls (`compute_control`, `chase_llc_control`);
+- two held-out parameter points, which the runner refuses without
+  `--final-run`;
+- the G0.a/G0.b thresholds, before any matrix result is observed.
+
+The three G0 working sets exceed the frozen 2 MiB LLC.  The 1 MiB chase control
+is intentionally LLC-resident after warmup.
+
+## Cluster build
+
+Build on a Slurm compute node with the already installed musl toolchain.  Do
+not commit the binary; `m5out/` is ignored.
+
+```bash
+cd /mmfs1/scratch/yqu30/DPRH
+
+MICRO_CC="/mmfs1/scratch/yqu30/tools/musl-1.2.6/bin/musl-gcc"
+MICRO_SOURCE="benchmarks/micro/dprh_memmix.c"
+MICRO_BIN="m5out/bin/dprh_memmix"
+
+mkdir -p m5out/bin results
+
+"${MICRO_CC}" \
+  -O3 \
+  -std=c11 \
+  -static \
+  -march=x86-64 \
+  -mtune=generic \
+  -fno-tree-vectorize \
+  -fno-stack-protector \
+  -Wall \
+  -Wextra \
+  -Werror \
+  "${MICRO_SOURCE}" \
+  -o "${MICRO_BIN}"
+```
+
+Verify the artifact before simulation:
+
+```bash
+test -x "${MICRO_BIN}"
+file "${MICRO_BIN}"
+readelf -h "${MICRO_BIN}" | grep -E 'Class:|Machine:'
+
+if readelf -l "${MICRO_BIN}" | grep -q INTERP
+then
+  echo "FAIL: dynamically linked binary"
+else
+  echo "PASS: static x86-64 binary"
+fi
+```
+
+Short native checks exercise the newly added mode dispatch without attempting
+the full `BATCHES` value:
+
+```bash
+"${MICRO_BIN}" stream 1 0 4 1000 1
+"${MICRO_BIN}" stride 1 0 16 1000 1
+"${MICRO_BIN}" chase 0 1 16 1000 1
+"${MICRO_BIN}" mix 1 1 4 1000 1
+"${MICRO_BIN}" compute 0 0 32 1000 1
+```
+
+## Gate-G0 dispatch
+
+The compatibility wrapper now invokes the manifest-driven runner:
+
+```bash
+bash scripts/smoke_test.sh
+```
+
+The runner does not build anything.  It records Git and binary provenance,
+runs the exact 3 × 3 `{kernel} × {B0,B1,B2}` matrix, and invokes
+`scripts/analyze_micro_g0.py`.  Raw outputs live under ignored directories
+`m5out/<run-tag>/` and `results/runs/<run-tag>/`; accepted results are copied
+into `results/PHASE_LOG.md` only after cluster review.

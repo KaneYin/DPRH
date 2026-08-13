@@ -7,6 +7,14 @@
   #include <stdlib.h>
   #include <string.h>
 
+  /*
+   * Long-running, deterministic kernels for instruction-windowed gem5 runs.
+   * "gather" exposes independent random reads; "chase" is a single shuffled
+   * pointer cycle and therefore serializes those reads. "mixed" is the legacy
+   * C18 stream+gather workload, while "mix" is the research-plan stream+chase
+   * workload. The command-line shape stays fixed across all modes.
+   */
+
   enum {
       CACHE_LINE = 64,
       GATHER_LANES = 8,
@@ -101,6 +109,23 @@
   }
 
   static uint64_t
+  run_stride(const volatile CacheLine *stream, size_t stream_lines,
+             unsigned stride_lines, uint64_t batches)
+  {
+      uint64_t accumulator = 0;
+      size_t position = 0;
+
+      for (uint64_t batch = 0; batch < batches; ++batch) {
+          accumulator += stream[position].value;
+          position += stride_lines;
+          if (position >= stream_lines)
+              position %= stream_lines;
+      }
+
+      return accumulator;
+  }
+
+  static uint64_t
   run_gather(const volatile CacheLine *values,
              const volatile uint32_t *order, size_t value_lines,
              uint64_t batches)
@@ -123,6 +148,23 @@
           total += accumulators[lane];
 
       return total;
+  }
+
+  static uint64_t
+  run_chase(const volatile CacheLine *values, uint32_t start,
+            unsigned steps_per_batch, uint64_t batches)
+  {
+      uint64_t accumulator = 0;
+      uint32_t position = start;
+
+      for (uint64_t batch = 0; batch < batches; ++batch) {
+          for (unsigned step = 0; step < steps_per_batch; ++step) {
+              position = (uint32_t)values[position].value;
+              accumulator += position;
+          }
+      }
+
+      return accumulator;
   }
 
   static uint64_t
@@ -158,6 +200,47 @@
       return sequential_accumulator;
   }
 
+  static uint64_t
+  run_mix(const volatile CacheLine *stream, size_t stream_lines,
+          const volatile CacheLine *values, uint32_t chase_start,
+          unsigned sequential_per_chase, uint64_t batches)
+  {
+      uint64_t accumulator = 0;
+      size_t stream_position = 0;
+      uint32_t chase_position = chase_start;
+
+      for (uint64_t batch = 0; batch < batches; ++batch) {
+          for (unsigned i = 0; i < sequential_per_chase; ++i) {
+              accumulator += stream[stream_position].value;
+              if (++stream_position == stream_lines)
+                  stream_position = 0;
+          }
+
+          chase_position = (uint32_t)values[chase_position].value;
+          accumulator += chase_position;
+      }
+
+      return accumulator;
+  }
+
+  static uint64_t
+  run_compute(unsigned operations_per_batch, uint64_t batches, uint64_t seed)
+  {
+      uint64_t value = seed;
+
+      for (uint64_t batch = 0; batch < batches; ++batch) {
+          for (unsigned operation = 0;
+               operation < operations_per_batch; ++operation) {
+              value ^= value >> 12;
+              value ^= value << 25;
+              value ^= value >> 27;
+              value *= UINT64_C(2685821657736338717);
+          }
+      }
+
+      return value;
+  }
+
   int
   main(int argc, char **argv)
   {
@@ -165,7 +248,8 @@
           fprintf(
               stderr,
               "usage: %s MODE STREAM_MIB RANDOM_MIB "
-              "SEQUENTIAL_PER_BATCH BATCHES SEED\n",
+              "PATTERN_ARG BATCHES SEED\n"
+              "  MODE: stream, stride, gather, chase, mix, mixed, compute\n",
               argv[0]
           );
           return 2;
@@ -174,29 +258,45 @@
       const char *mode = argv[1];
       uint64_t stream_mib = parse_u64(argv[2]);
       uint64_t random_mib = parse_u64(argv[3]);
-      uint64_t sequential_per_batch_u64 = parse_u64(argv[4]);
+      uint64_t pattern_arg_u64 = parse_u64(argv[4]);
       uint64_t batches = parse_u64(argv[5]);
       uint64_t seed = parse_u64(argv[6]);
 
       int use_stream =
-          strcmp(mode, "stream") == 0 || strcmp(mode, "mixed") == 0;
+          strcmp(mode, "stream") == 0 || strcmp(mode, "stride") == 0 ||
+          strcmp(mode, "mix") == 0 || strcmp(mode, "mixed") == 0;
       int use_gather =
           strcmp(mode, "gather") == 0 || strcmp(mode, "mixed") == 0;
+      int use_chase =
+          strcmp(mode, "chase") == 0 || strcmp(mode, "mix") == 0;
+      int use_compute = strcmp(mode, "compute") == 0;
+      int use_random = use_gather || use_chase;
 
-      if (!use_stream && !use_gather)
-          fail("MODE must be stream, gather, or mixed");
+      if (!use_stream && !use_random && !use_compute)
+          fail("unsupported MODE");
 
       if (use_stream && stream_mib == 0)
-          fail("stream mode requires STREAM_MIB > 0");
+          fail("stream-backed mode requires STREAM_MIB > 0");
 
-      if (use_gather && random_mib == 0)
-          fail("gather mode requires RANDOM_MIB > 0");
+      if (use_random && random_mib == 0)
+          fail("random-backed mode requires RANDOM_MIB > 0");
 
-      if (sequential_per_batch_u64 > 64)
-          fail("SEQUENTIAL_PER_BATCH must be <= 64");
+      if (pattern_arg_u64 > 64)
+          fail("PATTERN_ARG must be <= 64");
 
-      if (use_stream && sequential_per_batch_u64 == 0)
-          fail("stream mode requires SEQUENTIAL_PER_BATCH > 0");
+      if ((use_stream || use_chase || use_compute) && pattern_arg_u64 == 0)
+          fail("selected MODE requires PATTERN_ARG > 0");
+
+      if (use_compute && (stream_mib != 0 || random_mib != 0))
+          fail("compute mode requires zero-sized memory working sets");
+
+      if ((strcmp(mode, "stream") == 0 || strcmp(mode, "stride") == 0) &&
+          random_mib != 0)
+          fail("stream and stride modes require RANDOM_MIB == 0");
+
+      if ((strcmp(mode, "gather") == 0 || strcmp(mode, "chase") == 0) &&
+          stream_mib != 0)
+          fail("gather and chase modes require STREAM_MIB == 0");
 
       if (batches == 0 || seed == 0)
           fail("BATCHES and SEED must be nonzero");
@@ -204,8 +304,7 @@
       if (stream_mib > 512 || random_mib > 512)
           fail("each working set must be <= 512 MiB");
 
-      unsigned sequential_per_batch =
-          (unsigned)sequential_per_batch_u64;
+      unsigned pattern_arg = (unsigned)pattern_arg_u64;
 
       size_t stream_lines =
           (size_t)(stream_mib * 1024 * 1024 / CACHE_LINE);
@@ -227,7 +326,7 @@
               stream[i].value = (uint64_t)i + seed;
       }
 
-      if (use_gather) {
+      if (use_random) {
           values = allocate_aligned(value_lines * sizeof(*values));
           order = allocate_aligned(value_lines * sizeof(*order));
 
@@ -236,13 +335,20 @@
                   ((uint64_t)i * UINT64_C(11400714819323198485)) ^ seed;
 
           shuffle_indices(order, value_lines);
+
+          if (use_chase) {
+              for (size_t i = 0; i < value_lines; ++i) {
+                  size_t next = (i + 1 == value_lines) ? 0 : i + 1;
+                  values[order[i]].value = order[next];
+              }
+          }
       }
 
       printf(
           "[dprh-micro] kernel begin mode=%s stream_mib=%" PRIu64
-          " random_mib=%" PRIu64 " seq_per_batch=%u"
+          " random_mib=%" PRIu64 " pattern_arg=%u"
           " batches=%" PRIu64 " seed=%" PRIu64 "\n",
-          mode, stream_mib, random_mib, sequential_per_batch,
+          mode, stream_mib, random_mib, pattern_arg,
           batches, seed
       );
       fflush(stdout);
@@ -251,14 +357,25 @@
 
       if (strcmp(mode, "stream") == 0) {
           result = run_stream(
-              stream, stream_lines, sequential_per_batch, batches
+              stream, stream_lines, pattern_arg, batches
           );
+      } else if (strcmp(mode, "stride") == 0) {
+          result = run_stride(stream, stream_lines, pattern_arg, batches);
       } else if (strcmp(mode, "gather") == 0) {
           result = run_gather(values, order, value_lines, batches);
+      } else if (strcmp(mode, "chase") == 0) {
+          result = run_chase(values, order[0], pattern_arg, batches);
+      } else if (strcmp(mode, "mix") == 0) {
+          result = run_mix(
+              stream, stream_lines, values, order[0], pattern_arg, batches
+          );
+      } else if (strcmp(mode, "compute") == 0) {
+          result = run_compute(pattern_arg, batches, seed);
       } else {
+          /* Legacy C18 stream-plus-gather kernel, retained for reproducibility. */
           result = run_mixed(
               stream, stream_lines, values, order, value_lines,
-              sequential_per_batch, batches
+              pattern_arg, batches
           );
       }
 

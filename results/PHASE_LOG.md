@@ -1,10 +1,53 @@
 # DPRH Phase Log
 
+> **Authoritative scope revision (2026-08-13): microbenchmarks only.** SPEC,
+> MPKI/R2 selection, and "real-trace" steps retained later in this file are
+> historical implementation records and must not be dispatched. The current
+> workload source is `benchmarks/micro/dprh_memmix.c`; the frozen suite and
+> thresholds are `benchmarks/micro/manifest.json`; the current Cluster procedure
+> is `results/CLUSTER_HANDOFF.md`.
+
+## Current G0 microbenchmark pre-registration (2026-08-13)
+
+The suite is frozen before observing any B0/B1/B2 matrix result:
+
+| Set | Frozen points | Purpose |
+|---|---|---|
+| G0 main | `stream_main`, `stride_main`, `mix_main` | 3 × 3 B0/B1/B2 sanity/gate matrix |
+| W2 stress | `chase_stress` | serialized low-prefetch-coverage point |
+| W3 controls | `compute_control`, `chase_llc_control` | no-harm controls |
+| W5 held-out | `stride_heldout`, `mix_heldout` | excluded from tuning; runner requires `--final-run` |
+
+All configs use the identical `200,000,000`-instruction Atomic fast-forward,
+`1,000,000`-instruction O3 warmup, and `5,000,000`-instruction O3 measurement.
+The three G0 working sets exceed the 2 MiB LLC. `mix` is the research-plan
+stream-plus-dependent-chase kernel; legacy `mixed` remains only to reproduce
+C18's stream-plus-gather result.
+
+Pre-registered G0.a/G0.b decision rules:
+
+- **G0.a:** B1/B0 IPC improvement ≥1% on at least two of the three G0 kernels.
+- **G0.b:** at least one kernel has B2-vs-B1 absolute IPC delta ≥0.5%, or DRAM
+  read-row-hit delta ≥0.5 percentage point, or mean demand-read-latency delta
+  ≥0.5%.
+- **Kernel construct sanity:** across the three B1 cells, IPC span ≥1% and DRAM
+  read-row-hit span ≥1 percentage point, confirming the nominally different
+  kernels did not collapse to indistinguishable behavior.
+- Every cell must also pass provenance, profile, fatal scan, exact-window,
+  positive-IPC/demand-traffic, row-hit range, and H_slot-bound checks. B0 must
+  enqueue zero prefetches; B1/B2 must issue and enqueue prefetches.
+
+These are Phase-0 distinguishability checks, not performance claims. If they
+fail, diagnose the workload/mechanism behavior; do not loosen the thresholds
+after seeing the result.
+
 ## Frozen environment (Phase 0)
 - gem5 base commit: 51edbbb9cfd37e92e9901aea2caa4a8f20eda005
 - gem5 describe: v25.1.0.1-1-g51edbbb9cf
 - gem5 version: 25.1.0.1
-- Build: gem5.opt, x86 ISA, built on <cluster hostname>  [AWAITING CLUSTER — Task 2]
+- Current DPRH gem5: `72137d00b0` (`research/dprh`), pinned by the outer repo.
+- Build: gem5.opt, x86 ISA, built on `a-019` at 2026-08-13 10:33:38;
+  C18 rebuild and 13/13 H_slot tests passed.
 - DRAM device: DDR4_2400_16x4 (see D-A0b)  [x] confirmed by user (locked to plan default)
 - Primary prefetcher: SignaturePathPrefetcher (see D-A0)  [x] confirmed by user (locked to plan default)
 - Address mapping: RoRaBaCoCh | Page policy: open_adaptive | Read buffer: 64
@@ -293,8 +336,11 @@ traces excluded from ALL tuning; a manual, post-hoc list cannot enforce that.
   nonzero if any bench is held-out unless `--final-run` is passed; every
   `--final-run` invocation is appended to results/final_run.log (audit trail).
   `--selftest` asserts refuse-without-flag / allow-with-flag / allow-non-heldout.
-- scripts/smoke_test.sh: routes its benches through dispatch_guard before running
-  and accepts a leading `--final-run` to forward.
+- Historical behavior: the old SPEC smoke driver routed positional binaries
+  through `dispatch_guard.py`. This is superseded by the microbenchmark
+  manifest: `run_micro_g0.py` refuses entries marked `held_out` unless
+  `--final-run` is explicit. `dispatch_guard.py` remains only for archived R2
+  reproducibility and is not on the active run path.
 - Test/assertion that would have caught the gap: `dispatch_guard.py --selftest`
   and `mpki_profile.py --selftest` (both run on macOS/CI, no gem5).
 - Dry-run demonstration (macOS, temp HELD_OUT.md with 605.mcf_s): held-out trace
@@ -303,15 +349,13 @@ traces excluded from ALL tuning; a manual, post-hoc list cannot enforce that.
   (rc=0). Both selftests print OK. `python -m compileall scripts` clean.
 - Invariants untouched (scripts only; no gem5, no timing, no flags).
 
-## 3-trace smoke test (Task 12) — AUTHORED; AWAITING CLUSTER EXECUTION
-- Driver: scripts/smoke_test.sh (B0/B1/B2 x 3 memory-intensive benches ->
-  results/smoke.csv with IPC, LLC MPKI, DRAM row-hit rate).
-- Cluster: HANDOFF C16. Pick 3 memory-intensive benches from the Task 11 R2 set.
-- Sanity relations to verify FROM MEASURED smoke.csv (do NOT pre-judge):
-    (a) B1 IPC > B0 IPC on memory-intensive traces;
-    (b) B2 differs measurably from B1 on >=1 trace (row-hit rate / latency);
-    (c) no NaN/zero IPC.
-  Record the three numbers per trace here after the cluster run.
+## Three-kernel smoke test (Task 12) — REPLACED / AWAITING CLUSTER EXECUTION
+
+The old positional-binary/R2 driver is retired. `scripts/smoke_test.sh` now
+delegates to `scripts/run_micro_g0.py`, which selects only the three
+pre-registered `g0` points from `benchmarks/micro/manifest.json`, runs the exact
+9-cell B0/B1/B2 matrix, and invokes `scripts/analyze_micro_g0.py`. Raw artifacts
+are stored under ignored `m5out/<run-tag>/` and `results/runs/<run-tag>/`.
 
 ## Task 13 (Option B feedback wiring) — CONDITIONAL SKIP (decision deferred to cluster)
 - Task 13 fires ONLY if the cluster finds Tasks 9 & 12 not green. Its purpose is
@@ -326,33 +370,39 @@ traces excluded from ALL tuning; a manual, post-hoc list cannot enforce that.
   re-run HANDOFF C9, and commit "dprh(phase0): wire Option B filter feedback".
 
 ## Gate status
-- G0: NOT EVALUATED — AWAITING CLUSTER (four conditions below are data-dependent)
+- G0: PARTIAL — G0.c/G0.d PASS; G0.a/G0.b AWAITING MICROBENCHMARK MATRIX
 
 ### Gate G0 evaluation scaffold (Task 14) — fill from cluster data; DO NOT pre-sign
 Each condition records: evidence source, measured value, PASS/FAIL. All four are
 cluster-measured; none may be marked PASS without observed cluster output.
 
-- G0.a — B1 vs B0 prefetch speedup on memory-intensive traces
-    Source: results/smoke.csv (B1 IPC > B0 IPC on the memory-intensive traces).
+- G0.a — B1 vs B0 prefetch speedup on memory-intensive kernels
+    Source: `results/runs/<run-tag>/g0_verdict.json` using the frozen ≥1% on
+    ≥2-of-3 rule.
     Measured: __________    Verdict: AWAITING CLUSTER
 
-- G0.b — B2 vs B1 differs measurably on >=1 trace
-    Source: results/smoke.csv (row-hit rate / mean latency differs B1 vs B2).
+- G0.b — B2 vs B1 differs measurably on >=1 kernel
+    Source: `results/runs/<run-tag>/g0_verdict.json` using the frozen IPC /
+    row-hit / demand-latency distinguishability thresholds above.
     Measured: __________    Verdict: AWAITING CLUSTER
 
 - G0.c — V1 passes (PREFETCH flag reaches MemCtrl)
     Source: HANDOFF C2·V1 -- system.mem_ctrl.prefetchEnqueued > 0 (FIX-3
     permanent counter). Corroborated by prefetchReadLatency::samples > 0.
-    Measured: __________    Verdict: AWAITING CLUSTER
+    Measured: `pfIssued=499`, `prefetchEnqueued=314`.
+    Verdict: **PASS** (Cluster, C2·V1)
 
 - G0.d — traffic-gen calibration passes (row-hit monotonic in num_seq_pkts)
     Source: scripts/analyze_calibration.py output over cal_1/cal_4/cal_16.
-    Measured: __________    Verdict: AWAITING CLUSTER
+    Measured: `N=1: 0.02%`, `N=4: 74.84%`, `N=16: 93.30%`; isolated cells
+    have zero demand bytes, positive tagged-prefetch bytes/enqueues/latency
+    samples, and zero filter drops.
+    Verdict: **PASS** (Cluster, G0.d isolated calibration)
 
 ### Sign-off (only when ALL four PASS on cluster)
-- If all PASS: set "G0: PASSED (<date>)" with the four evidence lines, the frozen
-  commit (51edbbb9cfd37e92e9901aea2caa4a8f20eda005), and D-A0/D-A0b confirmations,
-  then commit "dprh(phase0): Gate G0 evaluated — PASS".
+- If G0.a and G0.b also PASS: set "G0: PASSED (<date>)" with all four evidence
+  lines and the exact outer/gem5/binary/manifest hashes recorded by the new
+  runner, then commit `dprh(phase0): Gate G0 evaluated — PASS`.
 - DO NOT start Phase 1 until G0 is PASSED. If any condition fails, the failing
   task's fix is the next work item.
 

@@ -51,8 +51,15 @@ jobs:
               with:
                   submodules: recursive
 
-            - name: Calibration analyzer self-test
-              run: python3 scripts/analyze_calibration.py --selftest
+            - name: Experiment-tool self-tests
+              shell: bash
+              run: |
+                  set -euo pipefail
+                  bash -n scripts/smoke_test.sh
+                  python3 -m json.tool benchmarks/micro/manifest.json >/dev/null
+                  python3 scripts/analyze_calibration.py --selftest
+                  python3 scripts/run_micro_g0.py --selftest
+                  python3 scripts/analyze_micro_g0.py --selftest
 
             - name: Install ccache
               # Put ccache's compiler shims (/usr/lib/ccache/{gcc,g++}) on PATH

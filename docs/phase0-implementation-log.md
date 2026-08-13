@@ -1,9 +1,13 @@
 # DPRH Phase 0 — Implementation Log
 
 Running log of Phase 0 implementation against `plan/phase0_implementation_plan.md`.
-Authoring machine: macOS. Build/measure: Linux cluster (not accessible here).
-Steps tagged `[cluster]` are authored but not executed; see
+Authoring machine: macOS. Build/measure: Linux cluster. Steps tagged `[cluster]`
+are never executed on the authoring machine; see
 `results/CLUSTER_HANDOFF.md` for the ordered command list.
+
+> **2026-08 scope revision:** SPEC/MPKI/R2 work below is historical. The active
+> plan is microbenchmark-only and uses the tracked C source, JSON manifest, and
+> manifest-driven Gate-G0 runner described in Tasks 11–12 below.
 
 Frozen gem5 base: `51edbbb9cfd37e92e9901aea2caa4a8f20eda005` (tag v25.1.0.1).
 Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_16x4**.
@@ -11,8 +15,9 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
 ## Git layout
 - gem5 tree edits (`gem5/src/**`, `gem5/configs/dprh/**`) are committed **inside
   the nested gem5 git repo** (remote `upstream` = gem5/gem5, diffable vs stock).
-- Repo-root tooling (`scripts/`, `tests/`, `results/`, `benchmarks/README.md`,
-  `plan/refs/`, `.gitignore`) is committed in the **outer** repo on branch `v0`.
+- Repo-root tooling (`scripts/`, `tests/`, `results/`, `benchmarks/`,
+  `plan/refs/`, `.gitignore`) is committed in the **outer** repo on branch
+  `main`.
 - All commits use `dprh(phase0): <summary>`.
 
 ## Hard invariants held during the initial Phase 0 implementation
@@ -28,7 +33,7 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
 | Task | Status | Notes |
 | --- | --- | --- |
 | 1 Version control, A0, PHASE_LOG | COMPLETE | base commit frozen, upstream remote added |
-| 2 Build gem5.opt | AUTHORED / cluster | build wrapper written; build = HANDOFF C1/C2 |
+| 2 Build gem5.opt | COMPLETE (cluster) | current `gem5.opt` verified; latest C18 rebuild on a-019 |
 | 3 Frozen sys def + B0 runner | COMPLETE (author) | run = C3 |
 | 4 B1 SPP prefetches | AUTHORED / cluster | wiring in run_se.py; run = C4/C5 |
 | 5 V1 prefetch-flag | AUTHORED / cluster | doc + static analysis; run = C6 |
@@ -37,10 +42,10 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
 | 8 B2 demand-first | COMPLETE (author) | frfcfs pre-pass; B1!=B2 run = C10 |
 | 9 Stats framework | COMPLETE (author) | H_slot inputs + latency histos; presence = C11 |
 | 10 Synthetic streams + tag patch | COMPLETE (author) | R6 tag + calibration; sweep = C12/C13 |
-| 11 SPEC bring-up + MPKI | AUTHORED / cluster | cross-compile+profile = C14/C15 (data-dependent) |
-| 12 3-trace smoke | AUTHORED / cluster | driver written; run = C16 (data-dependent) |
+| 11 C microbenchmark suite | AUTHORED / cluster | stream/stride/chase/mix + 2 controls + 2 held-out; compile pending |
+| 12 3-kernel smoke | AUTHORED / cluster | manifest-driven 9-cell runner/analyzer; matrix pending |
 | 13 Filter feedback wiring | CONDITIONAL SKIP | fires only if 9/12 not green on cluster |
-| 14 Gate G0 | SCAFFOLDED / cluster | four conditions AWAITING CLUSTER; no verdict claimed |
+| 14 Gate G0 | PARTIAL (cluster) | G0.c/G0.d PASS; G0.a/G0.b await 9-cell matrix |
 
 ## Plan-vs-reality adaptations (grounded in real gem5 source)
 1. **`prefetch_on_access`** is a `BasePrefetcher` param (Prefetcher.py:80), not a
@@ -70,6 +75,14 @@ Decisions locked to plan defaults: **D-A0 = SPP primary**, **D-A0b = DDR4_2400_1
    from demand pressure in the retained dual-stream H_slot harness. A flat
    calibration step is rejected because it does not provide distinguishable
    low/medium/high locality levels. (Task 10)
+7. **Microbenchmark-only replacement**: the retired SPEC/R2 flow could not
+   answer the revised design-space RQ and its positional-binary smoke script did
+   not preserve workload arguments or provenance. The tracked C source now has
+   separate `stride`, dependency-serialized `chase`, and stream-plus-chase
+   `mix` modes. Legacy `mixed` remains unchanged in meaning so C18 can still be
+   reproduced. `benchmarks/micro/manifest.json` freezes the G0 points, controls,
+   held-out points, windows, and thresholds; the runner hashes source, binary,
+   manifest, and both Git trees before dispatch. (Tasks 11–12)
 
 ## Key interfaces added
 - `DprhFilter` (`gem5/src/mem/dprh_filter.hh`): `accept()`, `noteUseful()`,
